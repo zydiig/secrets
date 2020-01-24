@@ -1,12 +1,16 @@
-use crate::encoding::Base64Data;
+use std::convert::TryFrom;
+use std::fs::File;
+use std::io::prelude::*;
+use std::mem::size_of;
+use std::path::Path;
+
+use byteorder::{BigEndian, ByteOrder};
+use serde::{Deserialize, Serialize};
+
 use crate::errors::Error;
 use crate::sodium;
 use crate::sodium::crypto_box;
 use crate::sodium::secretstream;
-use byteorder::{BigEndian, ByteOrder};
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::Path;
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum StreamMode {
@@ -14,20 +18,41 @@ pub enum StreamMode {
     Write,
 }
 
-pub struct FileHeader {
-    name: String,
-    path: String,
-    size: u64,
+#[derive(PartialEq, Eq, Debug)]
+pub enum ChunkType {
+    FileData = 0,
+    FileHeader = 1,
+    FileSentinel = 2,
 }
 
-pub struct FileSentinel {
+#[derive(Serialize, Deserialize)]
+pub struct FileHeader {
+    pub name: String,
+    pub path: String,
+}
 
+#[derive(Serialize, Deserialize)]
+pub struct FileSentinel {
+    pub hash: String,
+    pub size: u64,
 }
 
 pub struct Stream {
     file: File,
     mode: StreamMode,
     stream: secretstream::SecretStream,
+}
+
+impl TryFrom<u8> for ChunkType {
+    type Error = crate::errors::Error;
+    fn try_from(chunk_type: u8) -> Result<Self, Error> {
+        match chunk_type {
+            0 => Ok(ChunkType::FileData),
+            1 => Ok(ChunkType::FileHeader),
+            2 => Ok(ChunkType::FileSentinel),
+            _ => Err(Error::new("Invalid chunk type")),
+        }
+    }
 }
 
 impl Stream {
@@ -57,40 +82,41 @@ impl Stream {
         })
     }
 
-    pub fn read_chunk(&mut self) -> Result<Vec<u8>, Error> {
+    pub fn read_chunk(&mut self) -> Result<(Vec<u8>, ChunkType), Error> {
         if self.mode != StreamMode::Read {
             return Err("Wrong file mode".into());
         }
-        let mut encrypted_length = vec![0u8; 8 + secretstream::additional_bytes_per_message()];
-        let count = self.file.read(encrypted_length.as_mut_slice())?;
-        if count != encrypted_length.len() {
+        let mut encrypted_info =
+            vec![0u8; 1 + size_of::<u64>() + secretstream::additional_bytes_per_message()];
+        let count = self.file.read(&mut encrypted_info)?;
+        if count != encrypted_info.len() {
             return Err(Error::new("Unexpected EOF"));
         }
-        let length = BigEndian::read_u64(
-            self.stream
-                .pull(encrypted_length.as_slice(), None)?
-                .0
-                .as_slice(),
-        );
+        let info = self.stream.pull(encrypted_info.as_slice(), None)?.0;
+        let length = BigEndian::read_u64(&info[1..]);
+        let chunk_type = ChunkType::try_from(info[0])?;
         let mut buf = vec![0u8; length as usize];
+        /*
         if length == secretstream::additional_bytes_per_message() as u64 {
-            return Ok(vec![0u8; 0]);
+            return Ok((vec![0u8; 0], chunk_type));
         }
+        */
         self.file.read_exact(buf.as_mut_slice())?;
         let data = self.stream.pull(buf.as_slice(), None)?.0;
-        Ok(data)
+        Ok((data, chunk_type))
     }
 
-    pub fn write_chunk(&mut self, data: &[u8]) -> Result<(), Error> {
+    pub fn write_chunk(&mut self, data: &[u8], chunk_type: ChunkType) -> Result<(), Error> {
         if self.mode != StreamMode::Write {
             return Err("Wrong file mode".into());
         }
-        let mut length = vec![0u8; 8];
+        let mut buf = vec![0u8; 1 + size_of::<u64>()];
         BigEndian::write_u64(
-            length.as_mut_slice(),
+            &mut buf[1..],
             (data.len() + secretstream::additional_bytes_per_message()) as u64,
         );
-        let l = self.stream.push(&length, None, None)?;
+        buf[0] = chunk_type as u8;
+        let l = self.stream.push(&buf, None, None)?;
         let c = self.stream.push(data, None, None)?;
         self.file.write_all(l.as_slice())?;
         self.file.write_all(c.as_slice())?;

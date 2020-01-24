@@ -1,12 +1,21 @@
-use std::env;
-use std::fs::File;
-use std::io::prelude::*;
-
 extern crate byteorder;
 extern crate dirs;
 extern crate regex;
 extern crate serde;
 extern crate serde_json;
+
+use std::env;
+use std::fs::File;
+use std::io::prelude::*;
+use std::io::BufReader;
+
+use serde_json::to_string_pretty;
+
+use errors::Error;
+use keys::{generate_key, read_key, KeyType};
+use sodium::{hashing, signing};
+
+use streams::{ChunkType, FileHeader, FileSentinel};
 
 #[macro_use]
 mod errors;
@@ -15,11 +24,6 @@ mod keys;
 mod parsing;
 mod sodium;
 mod streams;
-use errors::Error;
-use keys::{generate_key, read_key, KeyType};
-use serde_json::to_string_pretty;
-use sodium::{hashing, signing};
-use std::io::BufReader;
 
 const CHUNK_SIZE: usize = 32768;
 
@@ -31,20 +35,47 @@ fn encrypt_file(
 ) -> errors::Result<()> {
     let sender_key = read_key(sender, KeyType::FullKey)?;
     let receiver_key = read_key(receiver, KeyType::PublicKey)?;
-    let mut input_file = File::open(input_path)?;
+    let input_path = std::fs::canonicalize(input_path)?;
+    let mut input_file = File::open(&input_path)?;
     let mut output = streams::Stream::create(
         output_path,
         &sender_key.enc_sk.unwrap().to_vec(),
         &receiver_key.enc_pk.to_vec(),
     )?;
+    let filename = input_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::new("Error getting actual filename"))?;
+    let header = streams::FileHeader {
+        name: filename.to_string(),
+        path: input_path
+            .to_str()
+            .ok_or_else(|| Error::new("Error getting actual path of input file"))?
+            .to_string(),
+    };
+    println!("Name: {}", header.name);
+    println!("Path: {}", header.path);
+    let header = serde_json::to_vec(&header)?;
+    output.write_chunk(&header, ChunkType::FileHeader)?;
     let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut hasher = hashing::Hasher::new();
+    let mut length: u64 = 0;
     loop {
         let count = input_file.read(buf.as_mut_slice())?;
-        output.write_chunk(&buf[0..count])?;
         if count == 0 {
             break;
         }
+        output.write_chunk(&buf[0..count], ChunkType::FileData)?;
+        hasher.update(&buf[0..count]);
+        length += count as u64;
     }
+    let sentinel = streams::FileSentinel {
+        size: length,
+        hash: encoding::to_hex(hasher.finalize()),
+    };
+    output.write_chunk(&serde_json::to_vec(&sentinel)?, ChunkType::FileSentinel)?;
+    println!("Hash: {}", sentinel.hash);
+    println!("Size: {}", sentinel.size);
     Ok(())
 }
 
@@ -61,9 +92,18 @@ fn decrypt_file(
         &sender_key.enc_pk.to_vec(),
         &receiver_key.enc_sk.unwrap().to_vec(),
     )?;
+    let header: FileHeader = serde_json::from_slice(&input.read_chunk()?.0)?;
+    println!("Name: {}", header.name);
+    println!("Path: {}", header.path);
     let mut output_file = File::create(output_path)?;
     loop {
-        let chunk = input.read_chunk()?;
+        let (chunk, chunk_type) = input.read_chunk()?;
+        if chunk_type == ChunkType::FileSentinel {
+            let sentinel: FileSentinel = serde_json::from_slice(&chunk)?;
+            println!("Hash: {}", sentinel.hash);
+            println!("Size: {}", sentinel.size);
+            break;
+        }
         if chunk.is_empty() {
             break;
         }

@@ -1,11 +1,14 @@
+use std::fs::File;
+use std::io::prelude::*;
+
+use serde;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use errors::Error;
+
 use crate::encoding::Base64Data;
 use crate::errors;
 use crate::sodium::{crypto_box, signing};
-use errors::Error;
-use serde;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::fs::File;
-use std::io::prelude::*;
 
 #[derive(PartialEq, Eq)]
 pub enum KeyType {

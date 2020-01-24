@@ -22,6 +22,14 @@ impl<'de> Deserialize<'de> for Base64Data {
     }
 }
 
+pub fn to_hex<T: AsRef<[u8]>>(data: T) -> String {
+    let mut result = String::new();
+    for i in data.as_ref().iter() {
+        result.push_str(&format!("{:02x}", i));
+    }
+    result
+}
+
 impl Base64Data {
     pub fn to_vec(&self) -> &Vec<u8> {
         AsRef::<Vec<u8>>::as_ref(self)
