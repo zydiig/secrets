@@ -1,16 +1,15 @@
-use std::convert::TryFrom;
-use std::fs::File;
-use std::io::prelude::*;
-use std::mem::size_of;
-use std::path::Path;
-
-use byteorder::{BigEndian, ByteOrder};
-use serde::{Deserialize, Serialize};
-
 use crate::errors::Error;
 use crate::sodium;
 use crate::sodium::crypto_box;
 use crate::sodium::secretstream;
+use byteorder::{BigEndian, ByteOrder};
+use serde::{Deserialize, Serialize};
+use std::convert::TryFrom;
+use std::fs::File;
+use std::io;
+use std::io::prelude::*;
+use std::mem::size_of;
+use std::path::Path;
 
 #[derive(PartialEq, Eq, Debug)]
 pub enum StreamMode {
@@ -18,20 +17,20 @@ pub enum StreamMode {
     Write,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum ChunkType {
     FileData = 0,
     FileHeader = 1,
     FileSentinel = 2,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FileHeader {
     pub name: String,
     pub path: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FileSentinel {
     pub hash: String,
     pub size: u64,
@@ -88,21 +87,14 @@ impl Stream {
         }
         let mut encrypted_info =
             vec![0u8; 1 + size_of::<u64>() + secretstream::additional_bytes_per_message()];
-        let count = self.file.read(&mut encrypted_info)?;
-        if count != encrypted_info.len() {
-            return Err(Error::new("Unexpected EOF"));
-        }
+        self.file.read_exact(&mut encrypted_info)?;
         let info = self.stream.pull(encrypted_info.as_slice(), None)?.0;
         let length = BigEndian::read_u64(&info[1..]);
         let chunk_type = ChunkType::try_from(info[0])?;
         let mut buf = vec![0u8; length as usize];
-        /*
-        if length == secretstream::additional_bytes_per_message() as u64 {
-            return Ok((vec![0u8; 0], chunk_type));
-        }
-        */
         self.file.read_exact(buf.as_mut_slice())?;
         let data = self.stream.pull(buf.as_slice(), None)?.0;
+        println!("type={:?}, len={}", chunk_type, data.len());
         Ok((data, chunk_type))
     }
 
@@ -120,6 +112,7 @@ impl Stream {
         let c = self.stream.push(data, None, None)?;
         self.file.write_all(l.as_slice())?;
         self.file.write_all(c.as_slice())?;
+        println!("type={:?}, len={}", chunk_type, data.len());
         Ok(())
     }
 

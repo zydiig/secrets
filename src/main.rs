@@ -15,32 +15,39 @@ use errors::Error;
 use keys::{generate_key, read_key, KeyType};
 use sodium::{hashing, signing};
 
+use serde::de::Unexpected::Char;
+use std::convert::TryInto;
 use streams::{ChunkType, FileHeader, FileSentinel};
 
 #[macro_use]
 mod errors;
+mod archive;
+mod buffer;
 mod encoding;
 mod keys;
 mod parsing;
 mod sodium;
 mod streams;
+mod zstd;
 
-const CHUNK_SIZE: usize = 32768;
+const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 fn encrypt_file(
     input_path: &str,
     output_path: &str,
     sender: Option<&str>,
     receiver: Option<&str>,
+    compression_level: Option<i32>,
 ) -> errors::Result<()> {
     let sender_key = read_key(sender, KeyType::FullKey)?;
     let receiver_key = read_key(receiver, KeyType::PublicKey)?;
     let input_path = std::fs::canonicalize(input_path)?;
     let mut input_file = File::open(&input_path)?;
-    let mut output = streams::Stream::create(
+    let mut output = archive::Archive::create(
         output_path,
         &sender_key.enc_sk.unwrap().to_vec(),
         &receiver_key.enc_pk.to_vec(),
+        compression_level.unwrap_or(3),
     )?;
     let filename = input_path
         .file_name()
@@ -53,29 +60,7 @@ fn encrypt_file(
             .ok_or_else(|| Error::new("Error getting actual path of input file"))?
             .to_string(),
     };
-    println!("Name: {}", header.name);
-    println!("Path: {}", header.path);
-    let header = serde_json::to_vec(&header)?;
-    output.write_chunk(&header, ChunkType::FileHeader)?;
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut hasher = hashing::Hasher::new();
-    let mut length: u64 = 0;
-    loop {
-        let count = input_file.read(buf.as_mut_slice())?;
-        if count == 0 {
-            break;
-        }
-        output.write_chunk(&buf[0..count], ChunkType::FileData)?;
-        hasher.update(&buf[0..count]);
-        length += count as u64;
-    }
-    let sentinel = streams::FileSentinel {
-        size: length,
-        hash: encoding::to_hex(hasher.finalize()),
-    };
-    output.write_chunk(&serde_json::to_vec(&sentinel)?, ChunkType::FileSentinel)?;
-    println!("Hash: {}", sentinel.hash);
-    println!("Size: {}", sentinel.size);
+    output.write_object(&header, &mut input_file)?;
     Ok(())
 }
 
@@ -87,28 +72,13 @@ fn decrypt_file(
 ) -> Result<(), Error> {
     let receiver_key = read_key(receiver, KeyType::FullKey)?;
     let sender_key = read_key(sender, KeyType::PublicKey)?;
-    let mut input = streams::Stream::open(
+    let mut input = archive::Archive::open(
         input_path,
         &sender_key.enc_pk.to_vec(),
         &receiver_key.enc_sk.unwrap().to_vec(),
     )?;
-    let header: FileHeader = serde_json::from_slice(&input.read_chunk()?.0)?;
-    println!("Name: {}", header.name);
-    println!("Path: {}", header.path);
     let mut output_file = File::create(output_path)?;
-    loop {
-        let (chunk, chunk_type) = input.read_chunk()?;
-        if chunk_type == ChunkType::FileSentinel {
-            let sentinel: FileSentinel = serde_json::from_slice(&chunk)?;
-            println!("Hash: {}", sentinel.hash);
-            println!("Size: {}", sentinel.size);
-            break;
-        }
-        if chunk.is_empty() {
-            break;
-        }
-        output_file.write_all(chunk.as_slice())?;
-    }
+    input.read_object(&mut output_file)?;
     output_file.sync_all()?;
     Ok(())
 }
@@ -164,6 +134,36 @@ fn verify_signature(
     Ok(())
 }
 
+fn test_file(input_path: &str, sender: Option<&str>, receiver: Option<&str>) -> Result<(), Error> {
+    let receiver_key = read_key(receiver, KeyType::FullKey)?;
+    let sender_key = read_key(sender, KeyType::PublicKey)?;
+    let mut input = streams::Stream::open(
+        input_path,
+        &sender_key.enc_pk.to_vec(),
+        &receiver_key.enc_sk.unwrap().to_vec(),
+    )?;
+    let header: FileHeader = serde_json::from_slice(&input.read_chunk()?.0)?;
+    let mut hasher = hashing::Hasher::new();
+    println!("Name: {}", header.name);
+    println!("Path: {}", header.path);
+    loop {
+        let (chunk, chunk_type) = input.read_chunk()?;
+        if chunk_type == ChunkType::FileData {
+            hasher.update(&chunk);
+        } else if chunk_type == ChunkType::FileSentinel {
+            let sentinel: FileSentinel = serde_json::from_slice(&chunk)?;
+            println!("Provided hash:   {}", sentinel.hash);
+            println!("Calculated hash: {}", encoding::to_hex(&hasher.finalize()));
+            println!("Size: {}", sentinel.size);
+            break;
+        }
+        if chunk.is_empty() {
+            break;
+        }
+    }
+    Ok(())
+}
+
 fn main() {
     let arg_vec: Vec<String> = env::args().collect();
     let args = parsing::parse_args(&arg_vec.as_slice()[1..]).unwrap();
@@ -171,22 +171,27 @@ fn main() {
     println!("{:?}", args);
     let op = args.subcommand;
     let mut result: Result<(), Error> = Err(Error::new("Invalid operation"));
-    if op == "encrypt" || op == "decrypt" {
-        if op == "encrypt" {
-            result = encrypt_file(
-                args.positionals[0].as_str(),
-                args.flags.get("output").map(|s| s.as_str()).unwrap(),
-                args.flags.get("key").map(|s| s.as_str()),
-                args.flags.get("to").map(|s| s.as_str()),
-            );
-        } else if op == "decrypt" {
-            result = decrypt_file(
-                args.positionals[0].as_str(),
-                args.flags.get("output").map(|s| s.as_str()).unwrap(),
-                args.flags.get("from").map(|s| s.as_str()),
-                args.flags.get("key").map(|s| s.as_str()),
-            );
-        }
+    if op == "encrypt" {
+        let compression_level = args
+            .flags
+            .get("comp")
+            .unwrap_or(&"6".to_string())
+            .parse()
+            .unwrap();
+        result = encrypt_file(
+            args.positionals[0].as_str(),
+            args.flags.get("output").map(|s| s.as_str()).unwrap(),
+            args.flags.get("key").map(|s| s.as_str()),
+            args.flags.get("to").map(|s| s.as_str()),
+            Some(compression_level),
+        );
+    } else if op == "decrypt" {
+        result = decrypt_file(
+            args.positionals[0].as_str(),
+            args.flags.get("output").map(|s| s.as_str()).unwrap(),
+            args.flags.get("from").map(|s| s.as_str()),
+            args.flags.get("key").map(|s| s.as_str()),
+        );
     } else if op == "genkey" {
         let keypair_name = args.positionals.get(0).map(|r| r.as_str());
         result = generate_key(keypair_name);
@@ -206,6 +211,12 @@ fn main() {
             &args.positionals.get(0).unwrap(),
             args.flags.get("sig").map(|s| s.as_str()).unwrap(),
             args.flags.get("from").map(|s| s.as_str()),
+        );
+    } else if op == "test" {
+        result = test_file(
+            &args.positionals.get(0).unwrap(),
+            args.flags.get("from").map(|s| s.as_str()),
+            args.flags.get("to").map(|s| s.as_str()),
         );
     }
     if let Err(err) = result {

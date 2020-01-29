@@ -1,7 +1,9 @@
-#[allow(dead_code, non_upper_case_globals,non_camel_case_types)]
+#[allow(dead_code, non_upper_case_globals, non_camel_case_types)]
 mod _sodium;
+pub mod aead;
 pub mod crypto_box;
 pub mod hashing;
+pub mod kdf;
 pub mod secretstream;
 #[allow(dead_code)]
 pub mod signing;
@@ -20,5 +22,11 @@ pub fn randombytes(length: usize) -> Vec<u8> {
         let mut buf = vec![0u8; length];
         _sodium::randombytes_buf(buf.as_mut_ptr() as *mut std::ffi::c_void, length);
         buf
+    }
+}
+
+pub fn increment(n: &mut [u8]) {
+    unsafe {
+        _sodium::sodium_increment(n.as_mut_ptr(), n.len());
     }
 }
