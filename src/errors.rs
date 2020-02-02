@@ -8,7 +8,7 @@ macro_rules! wrap_error {
 
 #[derive(Debug)]
 pub struct Error {
-    src: Option<Box<dyn std::error::Error + 'static>>,
+    src: Option<Box<dyn std::error::Error + 'static + Send + Sync>>,
     message: String,
 }
 
@@ -22,7 +22,7 @@ impl Error {
         }
     }
 
-    pub fn wrap(message: &str, err: Box<dyn std::error::Error>) -> Self {
+    pub fn wrap(message: &str, err: Box<dyn std::error::Error + Send + Sync>) -> Self {
         Self {
             src: Some(err),
             message: message.to_owned(),
@@ -75,17 +75,17 @@ impl From<serde_json::Error> for Error {
     }
 }
 
+impl Into<std::io::Error> for Error {
+    fn into(self) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::Other, self)
+    }
+}
+
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.src {
             Some(ref source) => Some(&**source),
             None => None,
         }
-    }
-}
-
-impl Into<std::io::Error> for Error {
-    fn into(self) -> std::io::Error {
-        std::io::Error::new(std::io::ErrorKind::Other, format!("{}", self))
     }
 }

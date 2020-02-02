@@ -1,7 +1,8 @@
 use super::_sodium;
-
+use serde::export::Formatter;
 use std::alloc::{alloc, Layout};
 use std::convert::TryFrom;
+use std::fmt::Display;
 use std::mem::align_of;
 
 pub const fn additional_bytes_per_message() -> usize {
@@ -14,6 +15,16 @@ pub const fn key_bytes() -> usize {
 
 pub const fn header_bytes() -> usize {
     _sodium::crypto_secretstream_xchacha20poly1305_HEADERBYTES as usize
+}
+
+#[derive(Display, Debug, Clone, Copy)]
+pub enum Error {
+    InvalidKey,
+    InvalidTag,
+    InvalidCiphertext,
+    MessageTooLong,
+    InvalidStreamHeader,
+    WrongStreamMode,
 }
 
 #[derive(PartialEq, Eq)]
@@ -31,14 +42,14 @@ pub enum MessageTag {
 }
 
 impl TryFrom<u8> for MessageTag {
-    type Error = &'static str;
+    type Error = Error;
     fn try_from(tag: u8) -> Result<Self, Self::Error> {
         match tag as u32 {
             _sodium::crypto_secretstream_xchacha20poly1305_TAG_MESSAGE => Ok(MessageTag::Message),
             _sodium::crypto_secretstream_xchacha20poly1305_TAG_PUSH => Ok(MessageTag::Push),
             _sodium::crypto_secretstream_xchacha20poly1305_TAG_REKEY => Ok(MessageTag::Rekey),
             _sodium::crypto_secretstream_xchacha20poly1305_TAG_FINAL => Ok(MessageTag::Final),
-            _ => Err("Invalid tag"),
+            _ => Err(Error::InvalidTag),
         }
     }
 }
@@ -102,10 +113,10 @@ impl SecretStream {
         self.header.clone()
     }
 
-    pub fn new_push(key: &[u8]) -> Result<SecretStream, &'static str> {
+    pub fn new_push(key: &[u8]) -> Result<SecretStream, Error> {
         unsafe {
             if key.len() != _sodium::crypto_secretstream_xchacha20poly1305_keybytes() {
-                return Err("Invalid key length");
+                return Err(Error::InvalidKey);
             }
             let state = SecretStream::alloc_state();
             let mut header =
@@ -123,7 +134,7 @@ impl SecretStream {
         }
     }
 
-    pub fn new_pull(header: &[u8], key: &[u8]) -> Result<SecretStream, &'static str> {
+    pub fn new_pull(header: &[u8], key: &[u8]) -> Result<SecretStream, Error> {
         unsafe {
             let state = SecretStream::alloc_state();
             match _sodium::crypto_secretstream_xchacha20poly1305_init_pull(
@@ -136,7 +147,7 @@ impl SecretStream {
                     header: Vec::from(header),
                     dir: Direction::Pull,
                 }),
-                _ => Err("Invalid header"),
+                _ => Err(Error::InvalidStreamHeader),
             }
         }
     }
@@ -146,39 +157,34 @@ impl SecretStream {
         data: &[u8],
         ad: Option<&[u8]>,
         tag: Option<MessageTag>,
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<Vec<u8>, Error> {
         unsafe {
             if self.dir != Direction::Push {
-                return Err("Stream is in Push mode");
+                return Err(Error::WrongStreamMode);
             }
             if data.len() > _sodium::crypto_secretstream_xchacha20poly1305_messagebytes_max() {
-                return Err("Message too long");
+                return Err(Error::MessageTooLong);
             }
             let mut ciphertext =
                 vec![0u8; data.len() + _sodium::crypto_secretstream_xchacha20poly1305_abytes()];
-            let adlen: u64;
-            let adptr: *const u8;
             let tag: u8 = tag.unwrap_or(MessageTag::Message).into();
-            match ad {
-                Some(ad) => {
-                    adptr = ad.as_ptr();
-                    adlen = ad.len() as u64
-                }
-                None => {
-                    adptr = std::ptr::null::<u8>();
-                    adlen = 0;
-                }
+            let (ad, adlen) = match ad {
+                Some(ad) => (ad.as_ptr(), ad.len() as u64),
+                None => (std::ptr::null::<u8>(), 0),
             };
+            let mut clen: u64 = 0;
             _sodium::crypto_secretstream_xchacha20poly1305_push(
                 self.state,
                 ciphertext.as_mut_ptr(),
-                std::ptr::null_mut::<u64>(),
+                &mut clen as *mut u64,
                 data.as_ptr(),
                 data.len() as u64,
-                adptr,
+                ad,
                 adlen,
                 tag,
             );
+            assert!(clen > 0);
+            ciphertext.truncate(clen as usize);
             Ok(ciphertext)
         }
     }
@@ -187,42 +193,85 @@ impl SecretStream {
         &self,
         ciphertext: &[u8],
         ad: Option<&[u8]>,
-    ) -> Result<(Vec<u8>, MessageTag), &'static str> {
+    ) -> Result<(Vec<u8>, MessageTag), Error> {
         unsafe {
             if ciphertext.len() < _sodium::crypto_secretstream_xchacha20poly1305_abytes() {
-                return Err("Ciphertext too short");
+                return Err(Error::InvalidCiphertext);
             }
             let mut plaintext = vec![
                 0u8;
                 ciphertext.len()
                     - _sodium::crypto_secretstream_xchacha20poly1305_abytes()
             ];
-            let adlen: u64;
-            let adptr: *const u8;
             let mut tag = 0u8;
-            match ad {
-                Some(ad) => {
-                    adptr = ad.as_ptr();
-                    adlen = ad.len() as u64
-                }
-                None => {
-                    adptr = std::ptr::null::<u8>();
-                    adlen = 0;
-                }
+            let (ad, adlen) = match ad {
+                Some(ad) => (ad.as_ptr(), ad.len() as u64),
+                None => (std::ptr::null(), 0),
             };
+            let mut mlen: u64 = 0;
             match _sodium::crypto_secretstream_xchacha20poly1305_pull(
                 self.state,
                 plaintext.as_mut_ptr(),
-                std::ptr::null_mut::<u64>(),
+                &mut mlen as *mut u64,
                 &mut tag,
                 ciphertext.as_ptr(),
                 ciphertext.len() as u64,
-                adptr,
+                ad,
                 adlen,
             ) {
-                0 => Ok((plaintext, MessageTag::try_from(tag)?)),
-                _ => Err("Invalid ciphertext"),
+                0 => {
+                    plaintext.truncate(mlen as usize);
+                    Ok((plaintext, MessageTag::try_from(tag)?))
+                }
+                _ => Err(Error::InvalidCiphertext),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sodium::randombytes;
+    use crate::sodium::secretstream;
+    use std::time::{Duration, Instant};
+
+    fn stream_perf_test_size(size: usize) {
+        let key = secretstream::generate_key();
+        let pusher = secretstream::SecretStream::new_push(&key).unwrap();
+        let puller = secretstream::SecretStream::new_pull(&pusher.get_header(), &key).unwrap();
+        let input = randombytes(size);
+        let iterations = 4000;
+        let start = Instant::now();
+        for i in 1..=iterations {
+            let c = pusher.push(&input, None, None);
+        }
+        let time = Instant::now().duration_since(start).as_secs_f64();
+        println!(
+            "size={}, speed={}",
+            size,
+            (size * iterations) as f64 / time / 1024.0 / 1024.0
+        );
+    }
+
+    #[test]
+    fn perf_test() {
+        for size in &[1024, 4096, 8192, 16384, 65536] {
+            stream_perf_test_size(*size);
+        }
+    }
+
+    #[test]
+    fn stream_test() {
+        let key = secretstream::generate_key();
+        let pusher = secretstream::SecretStream::new_push(&key).unwrap();
+        let puller = secretstream::SecretStream::new_pull(&pusher.get_header(), &key).unwrap();
+        let input = randombytes(1024);
+        for i in 1..100 {
+            let c = pusher
+                .push(&input, None, Some(secretstream::MessageTag::Message))
+                .unwrap();
+            let (p, tag) = puller.pull(&c, None).unwrap();
+            assert_eq!(p, input);
         }
     }
 }

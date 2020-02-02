@@ -41,8 +41,7 @@ pub struct ObjectInfo {
     pub name: String,
     pub original_path: String,
     pub path: Vec<String>,
-    pub offset: Option<u64>,
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub epilogue: Option<ObjectEpilogue>,
 }
 
@@ -54,7 +53,6 @@ impl Clone for ObjectInfo {
             original_path: self.original_path.clone(),
             path: self.path.clone(),
             epilogue: self.epilogue.clone(),
-            offset: self.offset,
         }
     }
 }
@@ -66,22 +64,13 @@ pub struct ObjectEpilogue {
 }
 
 impl ObjectInfo {
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, io::Error> {
+    pub fn from_path<P: AsRef<Path>>(path: P, object_path: &[String]) -> Result<Self, io::Error> {
+        let path = path.as_ref();
         let metadata = std::fs::metadata(&path)?;
         let real_path = std::fs::canonicalize(&path)?;
-        let name = real_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_owned())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Error getting filename"))?;
-        let original_path = real_path
-            .to_str()
-            .map(|s| s.to_owned())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Error getting file path"))?;
-        let object_path = real_path
-            .components()
-            .map(|s| s.as_os_str().to_str().unwrap().to_owned())
-            .collect();
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        let original_path = real_path.to_str().unwrap().to_string();
+        let object_path = object_path.to_vec();
         if metadata.is_dir() {
             Ok(Self {
                 object_type: ObjectType::Directory,
@@ -89,7 +78,6 @@ impl ObjectInfo {
                 original_path,
                 path: object_path,
                 epilogue: None,
-                offset: None,
             })
         } else if metadata.is_file() {
             Ok(Self {
@@ -98,7 +86,6 @@ impl ObjectInfo {
                 original_path,
                 path: object_path,
                 epilogue: None,
-                offset: None,
             })
         } else {
             Err(io::Error::new(

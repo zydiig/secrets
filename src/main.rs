@@ -1,13 +1,16 @@
 extern crate byteorder;
 extern crate dirs;
-extern crate regex;
 extern crate serde;
 extern crate serde_json;
+extern crate strum;
+#[macro_use]
+extern crate strum_macros;
 
-use std::env;
-use std::fs::File;
+use std::fs;
+use std::fs::{read, File};
 use std::io::prelude::*;
 use std::io::BufReader;
+use std::{env, io};
 
 use serde_json::to_string_pretty;
 
@@ -15,9 +18,12 @@ use errors::Error;
 use keys::{generate_key, read_key, KeyType};
 use sodium::{hashing, signing};
 
-use serde::de::Unexpected::Char;
-use std::convert::TryInto;
-use streams::{ChunkType, FileHeader, FileSentinel};
+use std::path::Path;
+
+use crate::archive::{ArchiveReader, ObjectReader};
+use crate::encoding::to_hex;
+use crate::utils::EmptyWriter;
+use archive::object::ObjectType;
 
 #[macro_use]
 mod errors;
@@ -27,13 +33,22 @@ mod encoding;
 mod keys;
 mod parsing;
 mod sodium;
-mod streams;
+mod utils;
 mod zstd;
 
 const CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
+fn get_path_components<P: AsRef<Path>>(path: P) -> Option<Vec<String>> {
+    let mut result = Vec::new();
+    for component in path.as_ref().components() {
+        let s = component.as_os_str().to_str()?;
+        result.push(s.to_owned());
+    }
+    Some(result)
+}
+
 fn encrypt_file(
-    input_path: &str,
+    input_paths: &[String],
     output_path: &str,
     sender: Option<&str>,
     receiver: Option<&str>,
@@ -41,26 +56,29 @@ fn encrypt_file(
 ) -> errors::Result<()> {
     let sender_key = read_key(sender, KeyType::FullKey)?;
     let receiver_key = read_key(receiver, KeyType::PublicKey)?;
-    let input_path = std::fs::canonicalize(input_path)?;
-    let mut input_file = File::open(&input_path)?;
-    let mut output = archive::Archive::create(
-        output_path,
+    let mut output = archive::ArchiveWriter::new(
+        File::create(output_path)?,
         &sender_key.enc_sk.unwrap().to_vec(),
         &receiver_key.enc_pk.to_vec(),
         compression_level.unwrap_or(3),
     )?;
-    let filename = input_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| Error::new("Error getting actual filename"))?;
-    let header = streams::FileHeader {
-        name: filename.to_string(),
-        path: input_path
-            .to_str()
-            .ok_or_else(|| Error::new("Error getting actual path of input file"))?
-            .to_string(),
-    };
-    output.write_object(&header, &mut input_file)?;
+    for input_path in input_paths {
+        let input_path = std::fs::canonicalize(input_path)?;
+        for path in utils::generate_tree(&input_path)? {
+            let object_path = get_path_components(
+                path.strip_prefix(&input_path.parent().unwrap())
+                    .map_err(|err| Error::new(err.to_string().as_str()))?,
+            )
+            .ok_or_else(|| "Error converting object path")?;
+            println!(
+                "Packing {} as {}",
+                path.to_str().unwrap(),
+                object_path.join("/")
+            );
+            output.write_object(path, &object_path)?;
+        }
+    }
+    output.end()?;
     Ok(())
 }
 
@@ -72,14 +90,41 @@ fn decrypt_file(
 ) -> Result<(), Error> {
     let receiver_key = read_key(receiver, KeyType::FullKey)?;
     let sender_key = read_key(sender, KeyType::PublicKey)?;
-    let mut input = archive::Archive::open(
-        input_path,
+    let mut input = archive::ArchiveReader::new(
+        File::open(input_path)?,
         &sender_key.enc_pk.to_vec(),
         &receiver_key.enc_sk.unwrap().to_vec(),
     )?;
-    let mut output_file = File::create(output_path)?;
-    input.read_object(&mut output_file)?;
-    output_file.sync_all()?;
+    let output_path = Path::new(output_path).to_path_buf();
+    loop {
+        let mut reader = match input.read_object()? {
+            Some(reader) => reader,
+            None => break,
+        };
+        let mut path = output_path.clone();
+        reader
+            .object_info
+            .path
+            .iter()
+            .for_each(|part| path.push(part));
+        if reader.object_info.object_type == ObjectType::Directory {
+            fs::create_dir_all(&path)?;
+            println!("Creating directory: {}", path.to_str().unwrap());
+            continue;
+        }
+        let mut output_file = utils::HashingWriter::new(File::create(&path)?);
+        std::io::copy(&mut reader, &mut output_file)?;
+        if to_hex(output_file.get_hash()) != reader.object_epilogue.as_ref().unwrap().hash {
+            return Err(Error::new("File hash mismatch"));
+        }
+        reader.object_info.epilogue = reader.object_epilogue.clone();
+        println!(
+            "Creating file: {}, hash={}",
+            path.to_str().unwrap(),
+            reader.object_epilogue.as_ref().unwrap().hash
+        );
+        output_file.into_inner().sync_all()?;
+    }
     Ok(())
 }
 
@@ -137,28 +182,30 @@ fn verify_signature(
 fn test_file(input_path: &str, sender: Option<&str>, receiver: Option<&str>) -> Result<(), Error> {
     let receiver_key = read_key(receiver, KeyType::FullKey)?;
     let sender_key = read_key(sender, KeyType::PublicKey)?;
-    let mut input = streams::Stream::open(
-        input_path,
-        &sender_key.enc_pk.to_vec(),
-        &receiver_key.enc_sk.unwrap().to_vec(),
+    let mut input = ArchiveReader::new(
+        File::open(input_path)?,
+        sender_key.enc_pk.as_ref(),
+        receiver_key.enc_sk.unwrap().as_ref(),
     )?;
-    let header: FileHeader = serde_json::from_slice(&input.read_chunk()?.0)?;
-    let mut hasher = hashing::Hasher::new();
-    println!("Name: {}", header.name);
-    println!("Path: {}", header.path);
     loop {
-        let (chunk, chunk_type) = input.read_chunk()?;
-        if chunk_type == ChunkType::FileData {
-            hasher.update(&chunk);
-        } else if chunk_type == ChunkType::FileSentinel {
-            let sentinel: FileSentinel = serde_json::from_slice(&chunk)?;
-            println!("Provided hash:   {}", sentinel.hash);
-            println!("Calculated hash: {}", encoding::to_hex(&hasher.finalize()));
-            println!("Size: {}", sentinel.size);
-            break;
+        let mut reader = match input.read_object()? {
+            Some(reader) => reader,
+            None => break,
+        };
+        println!("Name: {}", reader.object_info.name);
+        println!("Path: {}", reader.object_info.path.join("/"));
+        if reader.object_info.object_type == ObjectType::Directory {
+            continue;
         }
-        if chunk.is_empty() {
-            break;
+        let mut writer = utils::HashingWriter::new(EmptyWriter {});
+        io::copy(&mut reader, &mut writer)?;
+        let hash1 = reader.object_epilogue.as_ref().unwrap().hash.clone();
+        let hash2 = encoding::to_hex(&writer.get_hash());
+        println!("Provided hash:   {}", hash1);
+        println!("Calculated hash: {}", hash2);
+        println!("Size: {}", reader.object_epilogue.as_ref().unwrap().size);
+        if hash1 != hash2 {
+            panic!("Hash mismatch");
         }
     }
     Ok(())
@@ -179,7 +226,7 @@ fn main() {
             .parse()
             .unwrap();
         result = encrypt_file(
-            args.positionals[0].as_str(),
+            &args.positionals,
             args.flags.get("output").map(|s| s.as_str()).unwrap(),
             args.flags.get("key").map(|s| s.as_str()),
             args.flags.get("to").map(|s| s.as_str()),

@@ -1,32 +1,26 @@
 use std::cmp::min;
-use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::fs::File;
 use std::io;
 use std::io::prelude::*;
-use std::io::BufWriter;
-use std::mem::size_of;
+use std::ops::Deref;
 use std::path::Path;
 
-use byteorder::{BigEndian, ByteOrder};
+use serde::{Deserialize, Serialize};
 
-use crate::archive::object::{ObjectEpilogue, ObjectInfo};
-use crate::archive::stream::StreamWriter;
+use crate::archive::object::{ObjectEpilogue, ObjectInfo, ObjectType};
+use crate::archive::stream::{StreamReader, StreamWriter};
 use crate::buffer::Buffer;
-use crate::encoding;
 use crate::encoding::to_hex;
 use crate::errors::Error;
 use crate::sodium;
 use crate::sodium::hashing::Hasher;
+use crate::sodium::randombytes;
 use crate::sodium::{aead, kdf};
 use crate::sodium::{crypto_box, secretstream};
-use crate::sodium::{hashing, randombytes};
-use crate::streams::{ChunkType, FileHeader, FileSentinel, Stream};
 use crate::zstd::{Compressor, Decompressor};
-use serde::{Deserialize, Serialize};
-use std::borrow::BorrowMut;
-use std::fs::File;
 
-mod object;
+pub mod object;
 mod stream;
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -52,12 +46,12 @@ impl TryFrom<u8> for PartType {
 
 #[derive(Serialize, Deserialize)]
 pub struct Manifest {
-    objects: HashMap<String, ObjectInfo>,
+    objects: Vec<ObjectInfo>,
 }
 
 pub struct ArchiveWriter<W: Write> {
     writer: StreamWriter<W>,
-    objects: HashMap<String, ObjectInfo>,
+    objects: Vec<ObjectInfo>,
     compression_level: i32,
 }
 
@@ -69,7 +63,7 @@ impl<W: Write> Write for ObjectWriter<'_, W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
         match self.writer.write_part(buf, PartType::Data) {
             Ok(_) => Ok(buf.len()),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e.to_string())),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -98,51 +92,63 @@ impl<W: Write> ArchiveWriter<W> {
         })?;
         Ok(Self {
             writer,
-            objects: HashMap::new(),
+            objects: Vec::new(),
             compression_level,
         })
     }
 
     fn write_part(&mut self, data: &[u8], part_type: PartType) -> io::Result<()> {
-        let mut part_type = [part_type as u8];
         self.writer
-            .write_chunk(&part_type[..])
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, "Error writing part info"))?;
-        self.writer
-            .write_chunk(data)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, "Error writing part data"))?;
+            .write_chunk(data, part_type as u8)
+            .map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Error writing part data: {}", err),
+                )
+            })?;
         Ok(())
     }
 
-    fn write_object<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
-        let mut info = ObjectInfo::from_path(path.as_ref())?;
-        self.write_part(&serde_json::to_vec(&info)?, PartType::Header);
-        let mut writer = ObjectWriter { writer: self };
-        let mut compressor = Compressor::new(&mut writer, self.compression_level);
+    pub fn write_object<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        object_path: &[String],
+    ) -> io::Result<()> {
+        let mut info = ObjectInfo::from_path(path.as_ref(), object_path)?;
+        self.write_part(&serde_json::to_vec(&info)?, PartType::Header)?;
+        if info.object_type == ObjectType::Directory {
+            return Ok(());
+        }
+        let mut compressor = Compressor::new(self.compression_level);
         let mut file = File::open(&path)?;
         let mut hasher = Hasher::new();
-        let mut buf = vec![0u8; 1024 * 1024];
+        let mut buf = vec![0u8; 2 * 1024 * 1024];
         let mut size = 0u64;
         loop {
             let count = file.read(&mut buf)?;
             if count == 0 {
                 break;
             }
-            self.write_part(&buf[0..count], PartType::Data)?;
+            let compressed = compressor.compress(&buf[0..count]).unwrap();
+            if !compressed.is_empty() {
+                self.write_part(compressed, PartType::Data)?;
+            }
             hasher.update(&buf[0..count]);
             size += count as u64;
         }
+        self.write_part(compressor.finish().unwrap(), PartType::Data)?;
         info.epilogue = Some(ObjectEpilogue {
             hash: to_hex(hasher.finalize()),
             size,
         });
         self.write_part(
-            &serde_json::to_vec(&info.epilogue.unwrap())?,
+            &serde_json::to_vec(info.epilogue.as_ref().unwrap())?,
             PartType::Epilogue,
         )?;
+        self.objects.push(info);
         Ok(())
     }
-    fn end(&mut self) -> io::Result<()> {
+    pub fn end(&mut self) -> io::Result<()> {
         self.write_part(
             &serde_json::to_vec(&Manifest {
                 objects: self.objects.clone(),
@@ -159,7 +165,8 @@ impl<W: Write> Drop for ArchiveWriter<W> {
 }
 
 pub struct ArchiveReader<R: Read> {
-    reader: Option<R>,
+    reader: StreamReader<R>,
+    manifest: Option<Manifest>,
 }
 
 impl<R: Read> ArchiveReader<R> {
@@ -173,182 +180,83 @@ impl<R: Read> ArchiveReader<R> {
             nonce.as_slice(),
             sender_pk,
             receiver_sk,
-        )?;
-        let mut reader = stream::StreamReader::new(reader.borrow_mut(), &key)?;
+        )
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "error decrypting session key"))?;
+        let reader =
+            stream::StreamReader::new(reader, &key).map_err(|err| Into::<io::Error>::into(err))?;
         Ok(Self {
-            reader: Some(reader),
+            reader,
+            manifest: None,
         })
+    }
+
+    pub fn read_object(&mut self) -> io::Result<Option<ObjectReader<R>>> {
+        let (part_type, part) = self.read_part()?;
+        if part_type == PartType::End {
+            self.manifest = Some(serde_json::from_slice(&part)?);
+            return Ok(None);
+        }
+        let info: ObjectInfo = serde_json::from_slice(part.deref()).unwrap();
+        Ok(Some(ObjectReader {
+            archive: self,
+            object_info: info,
+            buf: Buffer::with_capacity(1024 * 1024),
+            object_epilogue: None,
+            decompressor: Decompressor::new(),
+        }))
+    }
+
+    pub fn read_part(&mut self) -> io::Result<(PartType, Vec<u8>)> {
+        let (chunk, chunk_type) = self
+            .reader
+            .read_chunk()
+            .map_err(|err| Into::<io::Error>::into(err))?;
+        let part_type = PartType::try_from(chunk_type).unwrap();
+        Ok((part_type, chunk))
     }
 }
 
-pub struct Archive {
-    stream: Stream,
-    compression_level: Option<i32>,
-}
-
-struct ObjectReader<'a> {
-    archive: &'a mut Archive,
-    sentinel: Option<FileSentinel>,
+pub struct ObjectReader<'a, R: Read> {
+    archive: &'a mut ArchiveReader<R>,
+    pub object_info: ObjectInfo,
     buf: Buffer,
+    pub object_epilogue: Option<ObjectEpilogue>,
+    decompressor: Decompressor,
 }
 
-impl Read for ObjectReader<'_> {
+impl<R: Read> Read for ObjectReader<'_, R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        if buf.is_empty() {
+        if buf.is_empty() || self.object_epilogue.is_some() {
             return Ok(0);
         }
         if !self.buf.is_empty() {
             return Ok(self.buf.drain_into(buf));
         }
-        let (chunk, chunk_type) = self
-            .archive
-            .stream
-            .read_chunk()
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
-        println!("{},{:?}", chunk.len(), chunk_type);
-        match chunk_type {
-            ChunkType::FileData => {
-                let size = min(chunk.len(), buf.len());
-                buf[0..size].copy_from_slice(&chunk[0..size]);
-                self.buf.put(&chunk[size..]);
+        let (part_type, part) = self.archive.read_part()?;
+        match part_type {
+            PartType::Data => {
+                let data = self.decompressor.decompress(&part).map_err(|err| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Error decompressing data: {}", err),
+                    )
+                })?;
+                let size = min(data.len(), buf.len());
+                if size == 0 {
+                    return Err(io::Error::from(io::ErrorKind::Interrupted));
+                }
+                buf[0..size].copy_from_slice(&data[0..size]);
+                self.buf.put(&data[size..]);
                 Ok(size)
             }
-            /*
-            ChunkType::FileSentinel => {
-                self.sentinel = Some(serde_json::from_slice(&chunk)?);
+            PartType::Epilogue => {
+                self.object_epilogue = Some(serde_json::from_slice(&part)?);
                 Ok(0)
             }
-            */
             _ => Err(io::Error::new(
                 io::ErrorKind::Other,
-                "Unexpected chunk type",
+                format!("Unexpected part type: {:?}", part_type),
             )),
         }
-    }
-}
-
-impl Archive {
-    pub fn open<P: AsRef<Path>>(
-        path: P,
-        sender_pk: &[u8],
-        receiver_sk: &[u8],
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            stream: Stream::open(path, sender_pk, receiver_sk)?,
-            compression_level: None,
-        })
-    }
-    pub fn create<P: AsRef<Path>>(
-        path: P,
-        sender_sk: &[u8],
-        receiver_pk: &[u8],
-        compression_level: i32,
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            stream: Stream::create(path, sender_sk, receiver_pk)?,
-            compression_level: Some(compression_level),
-        })
-    }
-    pub fn write_object(
-        &mut self,
-        header: &FileHeader,
-        reader: &mut dyn Read,
-    ) -> Result<(), Error> {
-        self.stream.write_chunk(
-            serde_json::to_vec(&header)?.as_slice(),
-            ChunkType::FileHeader,
-        )?;
-        let sentinel;
-        {
-            let compression_level = self.compression_level.unwrap();
-            let mut writer = ObjectWriter { archive: self };
-            let mut compressor = Compressor::new(
-                BufWriter::with_capacity(1024 * 1024, &mut writer),
-                compression_level,
-            );
-            let mut buf = vec![0u8; 128 * 1024];
-            let mut hasher = hashing::Hasher::new();
-            let mut size = 0usize;
-            loop {
-                let count = reader.read(&mut buf)?;
-                if count == 0 {
-                    break;
-                }
-                compressor.write_all(&buf[0..count])?;
-                hasher.update(&buf[0..count]);
-                size += count as usize;
-            }
-            compressor.finish()?;
-            sentinel = FileSentinel {
-                size: size as u64,
-                hash: encoding::to_hex(hasher.finalize()),
-            };
-        }
-        self.stream.write_chunk(
-            serde_json::to_vec(&sentinel)?.as_slice(),
-            ChunkType::FileSentinel,
-        )?;
-        Ok(())
-    }
-    pub fn read_object(&mut self, writer: &mut dyn Write) -> Result<(), Error> {
-        let (chunk, chunk_type) = self.stream.read_chunk()?;
-        assert_eq!(chunk_type, ChunkType::FileHeader);
-        let mut reader = ObjectReader {
-            archive: self,
-            sentinel: None,
-            buf: Buffer::with_capacity(4 * 1024 * 1024),
-        };
-        let mut decompressor = Decompressor::new(&mut reader);
-        let mut buf = vec![0u8; 1024 * 1024];
-        let mut writer = HashingWriter::new(writer);
-        loop {
-            let count;
-            match decompressor.read(&mut buf) {
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => {
-                    continue;
-                }
-                Err(err) => return Err(From::from(err)),
-                Ok(ret) => count = ret,
-            };
-            if count == 0 {
-                break;
-            }
-            writer.write_all(&buf[0..count])?;
-        }
-        println!("{}", encoding::to_hex(writer.get_hash()));
-        let (chunk, chunk_type) = self.stream.read_chunk()?;
-        let sentinel: FileSentinel = serde_json::from_slice(&chunk)?;
-        println!("{:?}", sentinel);
-        Ok(())
-    }
-}
-
-struct HashingWriter<W: Write> {
-    inner: Option<W>,
-    hasher: hashing::Hasher,
-}
-
-impl<W: Write> HashingWriter<W> {
-    fn new(writer: W) -> Self {
-        Self {
-            inner: Some(writer),
-            hasher: hashing::Hasher::new(),
-        }
-    }
-    fn get_hash(&mut self) -> Vec<u8> {
-        self.hasher.finalize()
-    }
-}
-
-impl<W: Write> Write for HashingWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
-        self.inner.as_mut().unwrap().write(buf).and_then(|count| {
-            self.hasher.update(&buf[0..count]);
-            Ok(count)
-        })
-    }
-
-    fn flush(&mut self) -> Result<(), io::Error> {
-        self.inner.as_mut().unwrap().flush()
     }
 }

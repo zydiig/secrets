@@ -1,9 +1,4 @@
-use std::cmp::min;
-use std::fs::read;
-use std::io;
-use std::io::prelude::*;
 use std::os::raw::c_void;
-use std::panic::resume_unwind;
 
 use crate::buffer;
 use crate::buffer::Buffer;
@@ -16,41 +11,40 @@ use crate::buffer::Buffer;
 )]
 mod _zstd;
 
-fn try_to(code: usize) -> Result<usize, io::Error> {
+fn try_to(code: usize) -> Result<usize, String> {
     unsafe {
         match _zstd::ZSTD_isError(code) {
             0 => Ok(code),
-            _ => Err(io::Error::new(
-                io::ErrorKind::Other,
+            _ => Err(format!(
+                "ZSTD error: {}",
                 std::ffi::CStr::from_ptr(_zstd::ZSTD_getErrorName(code))
                     .to_str()
-                    .expect("bad zstd error code"),
+                    .expect("Bad zstd error code")
             )),
         }
     }
 }
 
-pub struct Compressor<W: Write> {
+pub struct Compressor {
     ctx: *mut _zstd::ZSTD_CCtx,
-    writer: Option<W>,
     output_buf: Vec<u8>,
+    buf: buffer::Buffer,
 }
 
-pub struct Decompressor<R: Read> {
+pub struct Decompressor {
     ctx: *mut _zstd::ZSTD_DCtx,
-    reader: Option<R>,
     output_buf: Vec<u8>,
     buf: buffer::Buffer,
     frame_ended: bool,
 }
 
-impl<W: Write> Compressor<W> {
-    pub fn new(w: W, compression_level: i32) -> Self {
+impl Compressor {
+    pub fn new(compression_level: i32) -> Self {
         unsafe {
             let result = Self {
                 ctx: _zstd::ZSTD_createCCtx(),
-                writer: Some(w),
                 output_buf: vec![0u8; _zstd::ZSTD_CStreamOutSize()],
+                buf: Buffer::with_capacity(_zstd::ZSTD_CStreamOutSize() * 2),
             };
             _zstd::ZSTD_CCtx_setParameter(
                 result.ctx,
@@ -66,7 +60,7 @@ impl<W: Write> Compressor<W> {
         }
     }
 
-    pub fn finish(&mut self) -> io::Result<()> {
+    pub fn finish(&mut self) -> Result<&[u8], String> {
         unsafe {
             let mut output = _zstd::ZSTD_outBuffer {
                 dst: self.output_buf.as_mut_ptr() as *mut c_void,
@@ -78,22 +72,16 @@ impl<W: Write> Compressor<W> {
                     self.ctx,
                     &mut output as *mut _zstd::ZSTD_outBuffer,
                 ))?;
-                self.writer
-                    .as_mut()
-                    .unwrap()
-                    .write_all(&self.output_buf[0..output.pos])?;
+                self.buf.put(&self.output_buf[0..output.pos]);
                 if ret == 0 {
                     break;
                 }
                 output.pos = 0;
             }
+            Ok(self.buf.as_slice())
         }
-        Ok(())
     }
-}
-
-impl<W: Write> Write for Compressor<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    pub fn compress(&mut self, buf: &[u8]) -> Result<&[u8], String> {
         unsafe {
             let mut input = _zstd::ZSTD_inBuffer {
                 src: buf.as_ptr() as *const c_void,
@@ -111,16 +99,13 @@ impl<W: Write> Write for Compressor<W> {
                     &mut output as *mut _zstd::ZSTD_outBuffer,
                     &mut input as *mut _zstd::ZSTD_inBuffer,
                 ))?;
-                self.writer
-                    .as_mut()
-                    .unwrap()
-                    .write_all(&self.output_buf[0..output.pos])?;
+                self.buf.put(&self.output_buf[0..output.pos]);
                 output.pos = 0;
             }
-            Ok(input.pos)
+            Ok(self.buf.as_slice())
         }
     }
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn flush(&mut self) -> Result<&[u8], String> {
         unsafe {
             let mut output = _zstd::ZSTD_outBuffer {
                 dst: self.output_buf.as_mut_ptr() as *mut c_void,
@@ -132,60 +117,43 @@ impl<W: Write> Write for Compressor<W> {
                     self.ctx,
                     &mut output as *mut _zstd::ZSTD_outBuffer,
                 ))?;
-                self.writer
-                    .as_mut()
-                    .unwrap()
-                    .write_all(&self.output_buf[0..output.pos])?;
+                self.buf.put(&self.output_buf[0..output.pos]);
                 if ret == 0 {
                     break;
                 }
                 output.pos = 0;
             }
         }
-        Ok(())
+        Ok(self.buf.as_slice())
     }
 }
 
-impl<W: Write> Drop for Compressor<W> {
+impl Drop for Compressor {
     fn drop(&mut self) {
-        self.finish().unwrap();
         unsafe {
             _zstd::ZSTD_freeCCtx(self.ctx);
         }
     }
 }
 
-impl<R: Read> Decompressor<R> {
-    pub fn new(reader: R) -> Self {
+impl Decompressor {
+    pub fn new() -> Self {
         unsafe {
             Self {
                 ctx: _zstd::ZSTD_createDCtx(),
-                reader: Some(reader),
                 output_buf: vec![0u8; _zstd::ZSTD_DStreamInSize()],
                 buf: Buffer::with_capacity(4 * 1024 * 1024),
                 frame_ended: false,
             }
         }
     }
-}
 
-impl<R: Read> Read for Decompressor<R> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        if !self.buf.is_empty() {
-            return Ok(self.buf.drain_into(buf));
-        } else if self.frame_ended {
-            return Ok(0);
-        }
-        let mut cdata = vec![0u8; unsafe { _zstd::ZSTD_DStreamInSize() }];
-        let count = self.reader.as_mut().unwrap().read(&mut cdata)?;
+    pub fn decompress(&mut self, buf: &[u8]) -> Result<&[u8], String> {
         unsafe {
             let mut input = _zstd::ZSTD_inBuffer {
-                src: cdata.as_ptr() as *const c_void,
+                src: buf.as_ptr() as *const c_void,
                 pos: 0,
-                size: count,
+                size: buf.len(),
             };
             let mut output = _zstd::ZSTD_outBuffer {
                 dst: self.output_buf.as_mut_ptr() as *mut c_void,
@@ -205,7 +173,7 @@ impl<R: Read> Read for Decompressor<R> {
             if let Some(0) = ret {
                 self.frame_ended = true;
             }
-            Ok(self.buf.drain_into(buf))
+            Ok(self.buf.as_slice())
         }
     }
 }
