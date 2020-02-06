@@ -31,7 +31,7 @@ pub fn pwhash(
 mod tests {
     use crate::sodium::pwhash::{pwhash, SALT_BYTES};
     use crate::sodium::randombytes;
-    use crate::sodium::secretstream::key_bytes;
+    use crate::sodium::secretstream::KEY_BYTES;
     use std::time::Instant;
 
     #[test]
@@ -40,7 +40,7 @@ mod tests {
         let start = Instant::now();
         println!(
             "{:?}",
-            pwhash("password", key_bytes(), &salt, 3, 1024 * 1024 * 1024).unwrap()
+            pwhash("password", KEY_BYTES, &salt, 3, 1024 * 1024 * 1024).unwrap()
         );
         println!("{}", Instant::now().duration_since(start).as_secs_f64());
     }

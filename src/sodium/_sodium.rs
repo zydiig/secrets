@@ -96,7 +96,6 @@ pub const crypto_pwhash_scryptsalsa208sha256_OPSLIMIT_INTERACTIVE: u32 = 524288;
 pub const crypto_pwhash_scryptsalsa208sha256_MEMLIMIT_INTERACTIVE: u32 = 16777216;
 pub const crypto_pwhash_scryptsalsa208sha256_OPSLIMIT_SENSITIVE: u32 = 33554432;
 pub const crypto_pwhash_scryptsalsa208sha256_MEMLIMIT_SENSITIVE: u32 = 1073741824;
-pub type __uint8_t = ::std::os::raw::c_uchar;
 pub type __uint32_t = ::std::os::raw::c_uint;
 pub type __uint64_t = ::std::os::raw::c_ulong;
 extern "C" {
@@ -422,6 +421,13 @@ extern "C" {
 extern "C" {
     pub fn crypto_secretstream_xchacha20poly1305_tag_final() -> ::std::os::raw::c_uchar;
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct crypto_secretstream_xchacha20poly1305_state {
+    pub k: [::std::os::raw::c_uchar; 32usize],
+    pub nonce: [::std::os::raw::c_uchar; 12usize],
+    pub _pad: [::std::os::raw::c_uchar; 8usize],
+}
 extern "C" {
     pub fn crypto_secretstream_xchacha20poly1305_statebytes() -> usize;
 }
@@ -540,9 +546,3 @@ extern "C" {
     ) -> *mut ::std::os::raw::c_char;
 }
 pub const crypto_generichash_STATEBYTES: usize = 384;
-#[doc = " <div rustbindgen replaces=\"crypto_secretstream_xchacha20poly1305_state\"></div>"]
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct crypto_secretstream_xchacha20poly1305_state {
-    pub _internal: [u8; 24usize],
-}

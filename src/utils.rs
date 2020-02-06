@@ -1,23 +1,22 @@
 use crate::sodium::hashing;
-use serde_json::ser::State::Empty;
 use std::fs;
 use std::io;
 use std::io::prelude::Write;
 use std::io::Error;
 use std::path::{Path, PathBuf};
 
-pub fn generate_tree<P: AsRef<Path>>(path: P) -> io::Result<Vec<PathBuf>> {
+pub fn generate_tree<P: AsRef<Path>>(path: P, follow_symlinks: bool) -> io::Result<Vec<PathBuf>> {
     let path = path.as_ref();
     let mut result = Vec::new();
     result.push(path.to_path_buf());
-    if path.is_dir() {
+    let metadata = match follow_symlinks {
+        true => fs::metadata(path)?,
+        false => fs::symlink_metadata(path)?,
+    };
+    if metadata.is_dir() {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                result.extend(generate_tree(entry.path())?);
-            } else {
-                result.push(entry.path());
-            }
+            result.extend(generate_tree(entry.path(), follow_symlinks)?);
         }
     }
     Ok(result)
@@ -84,9 +83,18 @@ mod tests {
     use crate::utils::generate_tree;
 
     #[test]
-    fn exploration() {
-        for p in generate_tree("/home/zhenyan/git/spdlog").unwrap().iter() {
+    fn tree_test() {
+        for p in generate_tree("/home/zhenyan/git/spdlog", true)
+            .unwrap()
+            .iter()
+        {
             println!("{:?}", p);
         }
+    }
+
+    #[test]
+    fn symlink_test() {
+        let l = generate_tree("/tmp/td/", true).unwrap();
+        l.iter().for_each(|item| println!("{:?}", item));
     }
 }

@@ -13,18 +13,16 @@ pub fn parse_args(args: &[String]) -> Result<Arguments, String> {
     let mut index = 1usize;
     let mut positionals: Vec<String> = Vec::new();
     let flag_defs = vec![
-        ("k", "key"),
-        ("f", "from"),
-        ("t", "to"),
         ("o", "output"),
-        ("s", "sig"),
         ("c", "comp"),
+        ("p", "password"),
+        ("P", "passfile"),
     ];
     while index < args.len() {
         let arg = &args[index];
         let mut skip = false;
         for (short_def, long_def) in flag_defs.iter() {
-            if (short_def.is_empty() && format!("-{}", short_def) == arg.as_str())
+            if (!short_def.is_empty() && format!("-{}", short_def) == arg.as_str())
                 || format!("--{}", long_def) == arg.as_str()
             {
                 flags.insert(

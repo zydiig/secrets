@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 #[allow(dead_code, non_upper_case_globals, non_camel_case_types)]
 mod _sodium;
@@ -65,5 +65,7 @@ mod tests {
         let mut data = b"\xff\xff\xff\x00".to_vec();
         increment(&mut data);
         assert_eq!(data.as_slice(), b"\x00\x00\x00\x01");
+        increment(&mut data);
+        assert_eq!(data.as_slice(), b"\x01\x00\x00\x01");
     }
 }

@@ -1,6 +1,7 @@
 use super::_sodium;
 use std::alloc;
 use std::mem;
+use std::mem::size_of;
 
 type HashState = _sodium::crypto_generichash_state;
 
@@ -13,8 +14,8 @@ impl Hasher {
         unsafe {
             let state = alloc::alloc(
                 alloc::Layout::from_size_align(
-                    _sodium::crypto_generichash_STATEBYTES,
-                    mem::align_of::<u8>(),
+                    size_of::<HashState>(),
+                    mem::align_of::<HashState>(),
                 )
                 .expect("Bad memory layout"),
             ) as *mut HashState;
@@ -51,8 +52,8 @@ impl Drop for Hasher {
             alloc::dealloc(
                 self.state as *mut u8,
                 alloc::Layout::from_size_align(
-                    _sodium::crypto_generichash_STATEBYTES,
-                    mem::align_of::<u8>(),
+                    size_of::<HashState>(),
+                    mem::align_of::<HashState>(),
                 )
                 .expect("Bad memory layout"),
             );

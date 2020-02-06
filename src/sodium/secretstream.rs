@@ -1,21 +1,11 @@
 use super::_sodium;
-use serde::export::Formatter;
 use std::alloc::{alloc, Layout};
 use std::convert::TryFrom;
-use std::fmt::Display;
 use std::mem::align_of;
 
-pub const fn additional_bytes_per_message() -> usize {
-    _sodium::crypto_secretstream_xchacha20poly1305_ABYTES as usize
-}
-
-pub const fn key_bytes() -> usize {
-    _sodium::crypto_secretstream_xchacha20poly1305_KEYBYTES as usize
-}
-
-pub const fn header_bytes() -> usize {
-    _sodium::crypto_secretstream_xchacha20poly1305_HEADERBYTES as usize
-}
+pub const ADDITIONAL_BYTES: usize = _sodium::crypto_secretstream_xchacha20poly1305_ABYTES as usize;
+pub const KEY_BYTES: usize = _sodium::crypto_secretstream_xchacha20poly1305_KEYBYTES as usize;
+pub const HEADER_BYTES: usize = _sodium::crypto_secretstream_xchacha20poly1305_HEADERBYTES as usize;
 
 #[derive(Display, Debug, Clone, Copy)]
 pub enum Error {
@@ -184,7 +174,7 @@ impl SecretStream {
                 tag,
             );
             assert!(clen > 0);
-            ciphertext.truncate(clen as usize);
+            //ciphertext.truncate(clen as usize);
             Ok(ciphertext)
         }
     }
@@ -220,7 +210,7 @@ impl SecretStream {
                 adlen,
             ) {
                 0 => {
-                    plaintext.truncate(mlen as usize);
+                    //plaintext.truncate(mlen as usize);
                     Ok((plaintext, MessageTag::try_from(tag)?))
                 }
                 _ => Err(Error::InvalidCiphertext),
@@ -233,7 +223,7 @@ impl SecretStream {
 mod tests {
     use crate::sodium::randombytes;
     use crate::sodium::secretstream;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     fn stream_perf_test_size(size: usize) {
         let key = secretstream::generate_key();
