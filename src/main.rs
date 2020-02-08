@@ -4,20 +4,21 @@ extern crate serde_json;
 extern crate strum;
 #[macro_use]
 extern crate strum_macros;
+extern crate failure;
+extern crate regex;
 
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
 use std::{env, io};
 
-use errors::Error;
-
 use std::path::Path;
 
-use crate::archive::{ArchiveReader, ArchiveWriter};
+use crate::archive::{ArchiveReader, ArchiveWriter, ChunkType, Manifest};
 use crate::sodium::to_hex;
 use crate::utils::EmptyWriter;
 use archive::object::ObjectType;
+use failure::{ensure, err_msg, format_err, Backtrace, Error, Fail, ResultExt};
 
 #[macro_use]
 mod errors;
@@ -28,9 +29,9 @@ mod sodium;
 mod utils;
 mod zstd;
 
-fn get_password(args: &parsing::Arguments) -> Result<String, String> {
+fn get_password(args: &parsing::Arguments) -> Result<String, Error> {
     if args.flags.contains_key("password") && args.flags.contains_key("passfile") {
-        return Err("-p/--password and -P/--passfile are in conflict".into());
+        return Err(err_msg("-p/--password and -P/--passfile are in conflict"));
     }
     if let Some(password) = args.flags.get("password") {
         Ok(password.clone())
@@ -38,10 +39,10 @@ fn get_password(args: &parsing::Arguments) -> Result<String, String> {
         let mut password = String::new();
         File::open(passfile)
             .and_then(|ref mut file| file.read_to_string(&mut password))
-            .map_err(|err| format!("Error reading from passfile: {}", err))?;
-        Ok(password)
+            .context("Error reading from passfile")?;
+        Ok(password.trim().to_owned())
     } else {
-        Err("Please specify password or passfile".into())
+        Err(err_msg("Please specify password or passfile"))
     }
 }
 
@@ -58,32 +59,26 @@ fn encrypt_file(
     input_paths: &[String],
     output_path: &str,
     password: &str,
-    compression_level: Option<i32>,
-) -> errors::Result<()> {
-    let mut output = ArchiveWriter::new(
-        File::create(output_path)?,
-        password,
-        compression_level.unwrap_or(3),
-    )?;
+    compression_level: i32,
+    volume_size: Option<u64>,
+) -> Result<(), Error> {
+    let mut output = ArchiveWriter::new(output_path, password, compression_level, volume_size)?;
     for input_path in input_paths {
         let input_path = Path::new(input_path);
         for path in utils::generate_tree(&input_path, true)? {
             let object_path = get_path_components(
                 path.strip_prefix(&input_path.parent().unwrap())
-                    .map_err(|err| Error::new(err.to_string().as_str()))?,
+                    .context("Error transforming path")?,
             )
-            .ok_or_else(|| "Error converting object path")?;
+            .ok_or_else(|| err_msg("Error converting object path"))?;
             println!(
                 "Packing {} as {}",
                 path.to_str().unwrap(),
                 object_path.join("/")
             );
-            output.write_object(&path, &object_path).map_err(|err| {
-                wrap_error!(
-                    format!("Error opening {}", path.as_path().to_string_lossy()).as_str(),
-                    err
-                )
-            })?;
+            output
+                .write_object(&path, &object_path)
+                .context("Error packing object")?;
         }
     }
     output.end()?;
@@ -91,7 +86,7 @@ fn encrypt_file(
 }
 
 fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(), Error> {
-    let mut input = archive::ArchiveReader::new(File::open(input_path)?, &password)?;
+    let mut input = archive::ArchiveReader::new(input_path, &password)?;
     let output_path = Path::new(output_path).to_path_buf();
     loop {
         let mut reader = match input.read_object()? {
@@ -112,7 +107,7 @@ fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(
         let mut output_file = utils::HashingWriter::new(File::create(&path)?);
         std::io::copy(&mut reader, &mut output_file)?;
         if to_hex(&output_file.get_hash()) != reader.object_epilogue.as_ref().unwrap().hash {
-            return Err(Error::new("File hash mismatch"));
+            return Err(err_msg("File hash mismatch"));
         }
         reader.object_info.epilogue = reader.object_epilogue.clone();
         println!(
@@ -126,7 +121,7 @@ fn decrypt_file(input_path: &str, output_path: &str, password: &str) -> Result<(
 }
 
 fn test_file(input_path: &str, password: &str) -> Result<(), Error> {
-    let mut input = ArchiveReader::new(File::open(input_path)?, &password)?;
+    let mut input = ArchiveReader::new(input_path, &password)?;
     loop {
         let mut reader = match input.read_object()? {
             Some(reader) => reader,
@@ -141,13 +136,15 @@ fn test_file(input_path: &str, password: &str) -> Result<(), Error> {
         io::copy(&mut reader, &mut writer)?;
         let hash1 = reader.object_epilogue.as_ref().unwrap().hash.clone();
         let hash2 = sodium::to_hex(&writer.get_hash());
-        if hash1 != hash2 {
-            panic!("Hash mismatch");
-        }
+        ensure!(hash1 == hash2, "Hash mismatch");
         println!("Hash: {}", &hash1);
         println!("Size: {}", reader.object_epilogue.as_ref().unwrap().size);
         println!();
     }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&input.manifest.unwrap())?
+    );
     Ok(())
 }
 
@@ -157,19 +154,28 @@ fn main() {
     sodium::init().unwrap();
     println!("{:?}", &args);
     let op = &args.subcommand;
-    let mut result: Result<(), Error> = Err(Error::new("Invalid operation"));
+    let mut result: Result<(), Error> = Err(err_msg("Invalid operation"));
     if op == "encrypt" {
         let compression_level = args
             .flags
             .get("comp")
-            .unwrap_or(&"3".to_string())
-            .parse()
+            .or(Some(&"3".to_string()))
+            .unwrap()
+            .parse::<i32>()
             .unwrap();
+        let volume_size = args
+            .flags
+            .get("volume")
+            .map(|v| utils::parse_size(v))
+            .transpose()
+            .unwrap();
+        println!("{:?}", volume_size);
         result = encrypt_file(
             &args.positionals,
             args.flags.get("output").map(|s| s.as_str()).unwrap(),
             get_password(&args).unwrap().as_str(),
-            Some(compression_level),
+            compression_level,
+            volume_size,
         );
     } else if op == "decrypt" {
         result = decrypt_file(
@@ -185,6 +191,7 @@ fn main() {
     }
     if let Err(err) = result {
         println!("Error: {}", err);
+        println!("{}", err.backtrace());
         std::process::exit(1);
     }
 }

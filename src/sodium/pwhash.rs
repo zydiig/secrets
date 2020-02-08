@@ -1,4 +1,5 @@
 use crate::sodium::_sodium;
+use failure::{err_msg, Error};
 
 pub const SALT_BYTES: usize = _sodium::crypto_pwhash_SALTBYTES as usize;
 
@@ -8,7 +9,7 @@ pub fn pwhash(
     salt: &[u8],
     opslimit: u64,
     memlimit: usize,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, Error> {
     let mut out = vec![0u8; outlen];
     unsafe {
         match _sodium::crypto_pwhash(
@@ -22,7 +23,7 @@ pub fn pwhash(
             _sodium::crypto_pwhash_ALG_ARGON2ID13 as i32,
         ) {
             0 => Ok(out),
-            _ => Err("Error deriving key from password".into()),
+            _ => Err(err_msg("Error deriving key from password")),
         }
     }
 }

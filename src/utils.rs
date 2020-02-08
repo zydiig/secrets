@@ -1,9 +1,25 @@
 use crate::sodium::hashing;
+use failure::{err_msg, Error, ResultExt};
+use regex::Regex;
 use std::fs;
 use std::io;
 use std::io::prelude::Write;
-use std::io::Error;
 use std::path::{Path, PathBuf};
+
+pub fn parse_size(size: &str) -> Result<u64, Error> {
+    let pattern: Regex = Regex::new("^([0-9.]+)(K|M|G)?$").unwrap();
+    let capture = pattern
+        .captures(size)
+        .ok_or_else(|| err_msg("Invalid size specification"))?;
+    let mut base: f64 = capture[1].parse::<f64>().context("Error parsing number")?;
+    base *= match capture.get(2).map(|s| s.as_str()) {
+        Some("K") => 1024,
+        Some("M") => 1024 * 1024,
+        Some("G") => 1024 * 1024 * 1024,
+        _ => 1,
+    } as f64;
+    Ok(base.floor() as u64)
+}
 
 pub fn generate_tree<P: AsRef<Path>>(path: P, follow_symlinks: bool) -> io::Result<Vec<PathBuf>> {
     let path = path.as_ref();
@@ -25,11 +41,11 @@ pub fn generate_tree<P: AsRef<Path>>(path: P, follow_symlinks: bool) -> io::Resu
 pub struct EmptyWriter {}
 
 impl Write for EmptyWriter {
-    fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         Ok(buf.len())
     }
 
-    fn flush(&mut self) -> Result<(), Error> {
+    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
@@ -80,7 +96,15 @@ impl<W: Write> Write for HashingWriter<W> {
 
 #[cfg(test)]
 mod tests {
-    use crate::utils::generate_tree;
+    use crate::utils::{generate_tree, parse_size};
+
+    #[test]
+    fn size_test() {
+        assert_eq!(parse_size("16G").unwrap(), 16 * 1024 * 1024 * 1024);
+        assert_eq!(parse_size("4G").unwrap(), 4 * 1024 * 1024 * 1024);
+        assert_eq!(parse_size("512M").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(parse_size("128K").unwrap(), 128 * 1024);
+    }
 
     #[test]
     fn tree_test() {

@@ -17,6 +17,7 @@ pub fn parse_args(args: &[String]) -> Result<Arguments, String> {
         ("c", "comp"),
         ("p", "password"),
         ("P", "passfile"),
+        ("v", "volume"),
     ];
     while index < args.len() {
         let arg = &args[index];

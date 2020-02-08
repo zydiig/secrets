@@ -1,4 +1,5 @@
 use super::_sodium;
+use failure::{err_msg, Error, ResultExt};
 use std::alloc::{alloc, Layout};
 use std::convert::TryFrom;
 use std::mem::align_of;
@@ -6,16 +7,6 @@ use std::mem::align_of;
 pub const ADDITIONAL_BYTES: usize = _sodium::crypto_secretstream_xchacha20poly1305_ABYTES as usize;
 pub const KEY_BYTES: usize = _sodium::crypto_secretstream_xchacha20poly1305_KEYBYTES as usize;
 pub const HEADER_BYTES: usize = _sodium::crypto_secretstream_xchacha20poly1305_HEADERBYTES as usize;
-
-#[derive(Display, Debug, Clone, Copy)]
-pub enum Error {
-    InvalidKey,
-    InvalidTag,
-    InvalidCiphertext,
-    MessageTooLong,
-    InvalidStreamHeader,
-    WrongStreamMode,
-}
 
 #[derive(PartialEq, Eq)]
 pub enum Direction {
@@ -39,7 +30,7 @@ impl TryFrom<u8> for MessageTag {
             _sodium::crypto_secretstream_xchacha20poly1305_TAG_PUSH => Ok(MessageTag::Push),
             _sodium::crypto_secretstream_xchacha20poly1305_TAG_REKEY => Ok(MessageTag::Rekey),
             _sodium::crypto_secretstream_xchacha20poly1305_TAG_FINAL => Ok(MessageTag::Final),
-            _ => Err(Error::InvalidTag),
+            _ => Err(err_msg("Invalid message tag")),
         }
     }
 }
@@ -106,7 +97,7 @@ impl SecretStream {
     pub fn new_push(key: &[u8]) -> Result<SecretStream, Error> {
         unsafe {
             if key.len() != _sodium::crypto_secretstream_xchacha20poly1305_keybytes() {
-                return Err(Error::InvalidKey);
+                return Err(err_msg("Invalid key"));
             }
             let state = SecretStream::alloc_state();
             let mut header =
@@ -137,7 +128,7 @@ impl SecretStream {
                     header: Vec::from(header),
                     dir: Direction::Pull,
                 }),
-                _ => Err(Error::InvalidStreamHeader),
+                _ => Err(err_msg("Invalid secretstream header")),
             }
         }
     }
@@ -150,10 +141,10 @@ impl SecretStream {
     ) -> Result<Vec<u8>, Error> {
         unsafe {
             if self.dir != Direction::Push {
-                return Err(Error::WrongStreamMode);
+                return Err(err_msg("Stream is in wrong mode"));
             }
             if data.len() > _sodium::crypto_secretstream_xchacha20poly1305_messagebytes_max() {
-                return Err(Error::MessageTooLong);
+                return Err(err_msg("Message length too long"));
             }
             let mut ciphertext =
                 vec![0u8; data.len() + _sodium::crypto_secretstream_xchacha20poly1305_abytes()];
@@ -186,7 +177,7 @@ impl SecretStream {
     ) -> Result<(Vec<u8>, MessageTag), Error> {
         unsafe {
             if ciphertext.len() < _sodium::crypto_secretstream_xchacha20poly1305_abytes() {
-                return Err(Error::InvalidCiphertext);
+                return Err(err_msg("Invalid ciphertext"));
             }
             let mut plaintext = vec![
                 0u8;
@@ -213,7 +204,7 @@ impl SecretStream {
                     //plaintext.truncate(mlen as usize);
                     Ok((plaintext, MessageTag::try_from(tag)?))
                 }
-                _ => Err(Error::InvalidCiphertext),
+                _ => Err(err_msg("Invalid ciphertext")),
             }
         }
     }

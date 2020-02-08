@@ -2,6 +2,7 @@ use std::os::raw::c_void;
 
 use crate::buffer;
 use crate::buffer::Buffer;
+use failure::{err_msg, format_err, Error};
 
 #[allow(
     dead_code,
@@ -11,11 +12,11 @@ use crate::buffer::Buffer;
 )]
 mod _zstd;
 
-fn try_to(code: usize) -> Result<usize, String> {
+fn try_to(code: usize) -> Result<usize, Error> {
     unsafe {
         match _zstd::ZSTD_isError(code) {
             0 => Ok(code),
-            _ => Err(format!(
+            _ => Err(format_err!(
                 "ZSTD error: {}",
                 std::ffi::CStr::from_ptr(_zstd::ZSTD_getErrorName(code))
                     .to_str()
@@ -60,7 +61,7 @@ impl Compressor {
         }
     }
 
-    pub fn finish(&mut self) -> Result<&[u8], String> {
+    pub fn finish(&mut self) -> Result<&[u8], Error> {
         unsafe {
             let mut output = _zstd::ZSTD_outBuffer {
                 dst: self.output_buf.as_mut_ptr() as *mut c_void,
@@ -81,7 +82,7 @@ impl Compressor {
             Ok(self.buf.as_slice())
         }
     }
-    pub fn compress(&mut self, buf: &[u8]) -> Result<&[u8], String> {
+    pub fn compress(&mut self, buf: &[u8]) -> Result<&[u8], Error> {
         unsafe {
             let mut input = _zstd::ZSTD_inBuffer {
                 src: buf.as_ptr() as *const c_void,
@@ -105,7 +106,7 @@ impl Compressor {
             Ok(self.buf.as_slice())
         }
     }
-    fn flush(&mut self) -> Result<&[u8], String> {
+    fn flush(&mut self) -> Result<&[u8], Error> {
         unsafe {
             let mut output = _zstd::ZSTD_outBuffer {
                 dst: self.output_buf.as_mut_ptr() as *mut c_void,
@@ -148,7 +149,7 @@ impl Decompressor {
         }
     }
 
-    pub fn decompress(&mut self, buf: &[u8]) -> Result<&[u8], String> {
+    pub fn decompress(&mut self, buf: &[u8]) -> Result<&[u8], Error> {
         unsafe {
             let mut input = _zstd::ZSTD_inBuffer {
                 src: buf.as_ptr() as *const c_void,
