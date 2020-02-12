@@ -1,11 +1,4 @@
-extern crate byteorder;
-extern crate serde;
-extern crate serde_json;
-extern crate strum;
-#[macro_use]
-extern crate strum_macros;
-extern crate failure;
-extern crate regex;
+extern crate secrets;
 
 use std::fs;
 use std::fs::File;
@@ -20,31 +13,9 @@ use crate::utils::EmptyWriter;
 use archive::object::ObjectType;
 use failure::{ensure, err_msg, format_err, Backtrace, Error, Fail, ResultExt};
 
-#[macro_use]
-mod errors;
-mod archive;
-mod buffer;
-mod parsing;
-mod sodium;
-mod utils;
-mod zstd;
+use secrets::*;
 
-fn get_password(args: &parsing::Arguments) -> Result<String, Error> {
-    if args.flags.contains_key("password") && args.flags.contains_key("passfile") {
-        return Err(err_msg("-p/--password and -P/--passfile are in conflict"));
-    }
-    if let Some(password) = args.flags.get("password") {
-        Ok(password.clone())
-    } else if let Some(passfile) = args.flags.get("passfile") {
-        let mut password = String::new();
-        File::open(passfile)
-            .and_then(|ref mut file| file.read_to_string(&mut password))
-            .context("Error reading from passfile")?;
-        Ok(password.trim().to_owned())
-    } else {
-        Err(err_msg("Please specify password or passfile"))
-    }
-}
+use utils::get_password;
 
 fn get_path_components<P: AsRef<Path>>(path: P) -> Option<Vec<String>> {
     let mut result = Vec::new();
@@ -150,29 +121,40 @@ fn test_file(input_path: &str, password: &str) -> Result<(), Error> {
 
 fn main() {
     let arg_vec: Vec<String> = env::args().collect();
-    let args = parsing::parse_args(&arg_vec.as_slice()[1..]).unwrap();
+    let mut parser = parsing::Parser::new();
+    parser.add_argument("output", Some("o"), 1);
+    parser.add_argument("comp", Some("c"), 1);
+    parser.add_argument("volume", Some("v"), 1);
+    parser.add_argument("passfile", Some("P"), 1);
+    parser.add_argument("password", Some("p"), 1);
+    let args = parser.parse_args(&arg_vec[2..]).unwrap();
     sodium::init().unwrap();
     println!("{:?}", &args);
-    let op = &args.subcommand;
+    let op = &arg_vec[1];
     let mut result: Result<(), Error> = Err(err_msg("Invalid operation"));
     if op == "encrypt" {
         let compression_level = args
             .flags
             .get("comp")
-            .or(Some(&"3".to_string()))
+            .map(|o| o.as_ref().unwrap().as_str())
+            .or(Some("3"))
             .unwrap()
             .parse::<i32>()
             .unwrap();
         let volume_size = args
             .flags
             .get("volume")
+            .map(|o| o.as_ref().unwrap())
             .map(|v| utils::parse_size(v))
             .transpose()
             .unwrap();
         println!("{:?}", volume_size);
         result = encrypt_file(
             &args.positionals,
-            args.flags.get("output").map(|s| s.as_str()).unwrap(),
+            args.flags
+                .get("output")
+                .map(|s| s.as_ref().unwrap().as_str())
+                .unwrap(),
             get_password(&args).unwrap().as_str(),
             compression_level,
             volume_size,
@@ -180,7 +162,10 @@ fn main() {
     } else if op == "decrypt" {
         result = decrypt_file(
             args.positionals[0].as_str(),
-            args.flags.get("output").map(|s| s.as_str()).unwrap(),
+            args.flags
+                .get("output")
+                .map(|s| s.as_ref().unwrap().as_str())
+                .unwrap(),
             get_password(&args).unwrap().as_str(),
         );
     } else if op == "test" {

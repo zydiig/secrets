@@ -301,7 +301,6 @@ impl ArchiveReader {
             .puller
             .pull(&ciphertext, None)
             .context("Error decrypting chunk data")?;
-        println!("type={:?}, len={}", chunk_type, chunk.len());
         if chunk_type == ChunkType::VolumeEnd {
             self.open_next_volume()?;
             return self.read_chunk();

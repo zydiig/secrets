@@ -1,10 +1,29 @@
+use crate::parsing;
 use crate::sodium::hashing;
 use failure::{err_msg, Error, ResultExt};
 use regex::Regex;
 use std::fs;
+use std::fs::File;
 use std::io;
-use std::io::prelude::Write;
+use std::io::prelude::*;
 use std::path::{Path, PathBuf};
+
+pub fn get_password(args: &parsing::Arguments) -> Result<String, Error> {
+    if args.flags.contains_key("password") && args.flags.contains_key("passfile") {
+        return Err(err_msg("-p/--password and -P/--passfile are in conflict"));
+    }
+    if let Some(password) = args.flags.get("password") {
+        Ok(password.as_ref().unwrap().clone())
+    } else if let Some(passfile) = args.flags.get("passfile") {
+        let mut password = String::new();
+        File::open(passfile.as_ref().unwrap())
+            .and_then(|ref mut file| file.read_to_string(&mut password))
+            .context("Error reading from passfile")?;
+        Ok(password.trim().to_owned())
+    } else {
+        Err(err_msg("Please specify password or passfile"))
+    }
+}
 
 pub fn parse_size(size: &str) -> Result<u64, Error> {
     let pattern: Regex = Regex::new("^([0-9.]+)(K|M|G)?$").unwrap();

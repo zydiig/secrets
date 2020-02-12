@@ -1,5 +1,5 @@
 use super::_sodium;
-use crate::errors::Error;
+use failure::{err_msg, Error};
 
 pub const PUBLIC_KEY_BYTES: usize = _sodium::crypto_sign_PUBLICKEYBYTES as usize;
 pub const SECRET_KEY_BYTES: usize = _sodium::crypto_sign_SECRETKEYBYTES as usize;
@@ -26,7 +26,7 @@ impl Keypair {
 
 pub fn sign(data: &[u8], secret_key: &[u8]) -> Result<Vec<u8>, Error> {
     if secret_key.len() != SECRET_KEY_BYTES {
-        return Err("Incorrect secret key length".into());
+        return Err(err_msg("Incorrect secret key length"));
     }
     let mut sm = vec![0u8; data.len() + SIG_BYTES];
     unsafe {
@@ -43,10 +43,10 @@ pub fn sign(data: &[u8], secret_key: &[u8]) -> Result<Vec<u8>, Error> {
 
 pub fn open(signed_message: &[u8], public_key: &[u8]) -> Result<Vec<u8>, Error> {
     if signed_message.len() < SIG_BYTES {
-        return Err("Signed message too short".into());
+        return Err(err_msg("Signed message too short"));
     }
     if public_key.len() != PUBLIC_KEY_BYTES {
-        return Err("Incorrect public key length".into());
+        return Err(err_msg("Incorrect public key length"));
     }
     let mut m = vec![0u8; signed_message.len() - SIG_BYTES];
     unsafe {
@@ -58,7 +58,7 @@ pub fn open(signed_message: &[u8], public_key: &[u8]) -> Result<Vec<u8>, Error> 
             public_key.as_ptr(),
         ) {
             0 => Ok(m),
-            _ => Err("Signature verification failed".into()),
+            _ => Err(err_msg("Signature verification failed")),
         }
     }
 }
@@ -66,7 +66,7 @@ pub fn open(signed_message: &[u8], public_key: &[u8]) -> Result<Vec<u8>, Error> 
 pub fn sign_detached(data: &[u8], secret_key: &[u8]) -> Result<Vec<u8>, Error> {
     let mut sig = vec![0u8; SIG_BYTES];
     if secret_key.len() != SECRET_KEY_BYTES {
-        return Err("Incorrect secret key length".into());
+        return Err(err_msg("Incorrect secret key length"));
     }
     unsafe {
         _sodium::crypto_sign_detached(
@@ -82,10 +82,10 @@ pub fn sign_detached(data: &[u8], secret_key: &[u8]) -> Result<Vec<u8>, Error> {
 
 pub fn verify_detached(data: &[u8], signature: &[u8], public_key: &[u8]) -> Result<bool, Error> {
     if public_key.len() != PUBLIC_KEY_BYTES {
-        return Err("Incorrect public key length".into());
+        return Err(err_msg("Incorrect public key length"));
     }
     if signature.len() != SIG_BYTES {
-        return Err("Incorrect signature length".into());
+        return Err(err_msg("Incorrect signature length"));
     }
     unsafe {
         Ok(_sodium::crypto_sign_verify_detached(
