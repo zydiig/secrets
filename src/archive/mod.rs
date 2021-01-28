@@ -95,8 +95,7 @@ impl ArchiveWriter {
         file.write_all(&salt)?;
         byte_count += salt.len() as u64;
         let key = pwhash::pwhash(password, secretstream::KEY_BYTES, &salt, OPSLIMIT, MEMLIMIT)
-            .context("Error deriving key from password")
-            .unwrap();
+            .context("Error deriving key from password")?;
         let mut params = vec![0u8; 2 * size_of::<u64>()];
         BigEndian::write_u64_into(&[OPSLIMIT, MEMLIMIT as u64], &mut params);
         file.write_all(&params)?;
@@ -126,8 +125,12 @@ impl ArchiveWriter {
         let encrypted_data = self.pusher.push(data, None, None).unwrap();
         assert_eq!(encrypted_data.len(), clen);
         assert!(encrypted_data.len() as u64 <= std::u32::MAX as u64);
-        self.file.write_all(&encrypted_info)?;
-        self.file.write_all(&encrypted_data)?;
+        self.file
+            .write_all(&encrypted_info)
+            .context("Error writing chunk info")?;
+        self.file
+            .write_all(&encrypted_data)
+            .context("Error writing chunk data")?;
         Ok((encrypted_info.len() + encrypted_data.len()) as u64)
     }
 

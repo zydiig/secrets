@@ -2,8 +2,8 @@
 
 pub const ZSTD_VERSION_MAJOR: u32 = 1;
 pub const ZSTD_VERSION_MINOR: u32 = 4;
-pub const ZSTD_VERSION_RELEASE: u32 = 4;
-pub const ZSTD_VERSION_NUMBER: u32 = 10404;
+pub const ZSTD_VERSION_RELEASE: u32 = 8;
+pub const ZSTD_VERSION_NUMBER: u32 = 10408;
 pub const ZSTD_CLEVEL_DEFAULT: u32 = 3;
 pub const ZSTD_MAGICNUMBER: u32 = 4247762216;
 pub const ZSTD_MAGIC_DICTIONARY: u32 = 3962610743;
@@ -138,6 +138,11 @@ pub const ZSTD_cParameter_ZSTD_c_experimentalParam4: ZSTD_cParameter = 1001;
 pub const ZSTD_cParameter_ZSTD_c_experimentalParam5: ZSTD_cParameter = 1002;
 pub const ZSTD_cParameter_ZSTD_c_experimentalParam6: ZSTD_cParameter = 1003;
 pub const ZSTD_cParameter_ZSTD_c_experimentalParam7: ZSTD_cParameter = 1004;
+pub const ZSTD_cParameter_ZSTD_c_experimentalParam8: ZSTD_cParameter = 1005;
+pub const ZSTD_cParameter_ZSTD_c_experimentalParam9: ZSTD_cParameter = 1006;
+pub const ZSTD_cParameter_ZSTD_c_experimentalParam10: ZSTD_cParameter = 1007;
+pub const ZSTD_cParameter_ZSTD_c_experimentalParam11: ZSTD_cParameter = 1008;
+pub const ZSTD_cParameter_ZSTD_c_experimentalParam12: ZSTD_cParameter = 1009;
 pub type ZSTD_cParameter = u32;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -223,6 +228,8 @@ extern "C" {
 }
 pub const ZSTD_dParameter_ZSTD_d_windowLogMax: ZSTD_dParameter = 100;
 pub const ZSTD_dParameter_ZSTD_d_experimentalParam1: ZSTD_dParameter = 1000;
+pub const ZSTD_dParameter_ZSTD_d_experimentalParam2: ZSTD_dParameter = 1001;
+pub const ZSTD_dParameter_ZSTD_d_experimentalParam3: ZSTD_dParameter = 1002;
 pub type ZSTD_dParameter = u32;
 extern "C" {
     pub fn ZSTD_dParam_getBounds(dParam: ZSTD_dParameter) -> ZSTD_bounds;

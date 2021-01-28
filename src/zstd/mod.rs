@@ -142,7 +142,7 @@ impl Decompressor {
         unsafe {
             Self {
                 ctx: _zstd::ZSTD_createDCtx(),
-                output_buf: vec![0u8; _zstd::ZSTD_DStreamInSize()],
+                output_buf: vec![0u8; _zstd::ZSTD_DStreamOutSize()],
                 buf: Buffer::with_capacity(4 * 1024 * 1024),
                 frame_ended: false,
             }
