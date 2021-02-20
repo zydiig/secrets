@@ -14,9 +14,8 @@ use crate::sodium;
 use crate::sodium::hashing::Hasher;
 use crate::sodium::pwhash;
 use crate::sodium::randombytes;
+use crate::sodium::secretstream;
 use crate::sodium::secretstream::SecretStream;
-use crate::sodium::{aead, kdf};
-use crate::sodium::{crypto_box, secretstream};
 use crate::zstd::{Compressor, Decompressor};
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt};
 use failure::{ensure, err_msg, format_err, Error, ResultExt};
@@ -81,7 +80,7 @@ impl ArchiveWriter {
     pub fn new<P: AsRef<Path>>(
         path: P,
         password: &str,
-        compression_level: i32,
+        compression_level: Option<i32>,
         volume_size: Option<u64>,
     ) -> Result<Self, Error> {
         let mut file = match volume_size {
@@ -107,7 +106,7 @@ impl ArchiveWriter {
             file,
             pusher,
             objects: Vec::new(),
-            compression_level,
+            compression_level: compression_level.unwrap_or(3),
             volume_counter: 1,
             volume_size,
             byte_count,

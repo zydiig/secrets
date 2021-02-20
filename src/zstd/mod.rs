@@ -2,7 +2,7 @@ use std::os::raw::c_void;
 
 use crate::buffer;
 use crate::buffer::Buffer;
-use failure::{err_msg, format_err, Error};
+use failure::{format_err, Error};
 
 #[allow(
     dead_code,

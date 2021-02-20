@@ -100,7 +100,7 @@ pub mod aes {
 #[cfg(test)]
 mod tests {
     use crate::sodium::aead::{aes, encrypt, KEY_BYTES, NONCE_BYTES};
-    use crate::sodium::randombytes;
+    use crate::sodium::{init, randombytes};
     use std::time::Instant;
 
     const ITERATIONS: usize = 1024 * 16;
@@ -139,6 +139,7 @@ mod tests {
 
     #[test]
     fn aead_perf_test() {
+        init().unwrap();
         for &size in &[128, 512, 1024, 2048, 4096, 8192, 16384, 65536] {
             aead_perf_test_size(size);
             aes_perf_test_size(size);

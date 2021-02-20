@@ -2,20 +2,27 @@ extern crate secrets;
 
 use std::fs;
 use std::fs::File;
+use std::io;
 use std::io::prelude::*;
-use std::{env, io};
+use std::path::{Path, PathBuf};
 
-use std::path::Path;
+use clap::Clap;
+use failure::{ensure, err_msg, Error, ResultExt};
 
-use crate::archive::{ArchiveReader, ArchiveWriter, ChunkType, Manifest};
-use crate::sodium::to_hex;
-use crate::utils::EmptyWriter;
 use archive::object::ObjectType;
-use failure::{ensure, err_msg, format_err, Backtrace, Error, Fail, ResultExt};
-
 use secrets::*;
 
-use utils::get_password;
+use crate::archive::{ArchiveReader, ArchiveWriter};
+use crate::sodium::to_hex;
+use crate::utils::EmptyWriter;
+
+fn read_file_content<P: AsRef<Path>>(path: P) -> Result<String, failure::Error> {
+    let mut content = String::new();
+    File::open(path.as_ref())
+        .and_then(|ref mut file| file.read_to_string(&mut content))
+        .context("Error reading from file")?;
+    Ok(content)
+}
 
 fn get_path_components<P: AsRef<Path>>(path: P) -> Option<Vec<String>> {
     let mut result = Vec::new();
@@ -30,7 +37,7 @@ fn encrypt_file(
     input_paths: &[String],
     output_path: &str,
     password: &str,
-    compression_level: i32,
+    compression_level: Option<i32>,
     volume_size: Option<u64>,
 ) -> Result<(), Error> {
     let mut output = ArchiveWriter::new(output_path, password, compression_level, volume_size)?;
@@ -119,61 +126,71 @@ fn test_file(input_path: &str, password: &str) -> Result<(), Error> {
     Ok(())
 }
 
+#[derive(Clap, Debug)]
+#[clap(version = "0.0.1")]
+struct Opts {
+    #[clap(short = 'P', long = "passfile", global = true)]
+    password_file: Option<PathBuf>,
+    #[clap(short = 'p', long = "password", global = true)]
+    password: Option<String>,
+    #[clap(subcommand)]
+    subcommand: Subcommands,
+}
+
+#[derive(Clap, Debug)]
+enum Subcommands {
+    #[clap()]
+    Encrypt {
+        #[clap(short = 'o', long = "output")]
+        output: String,
+        #[clap(short = 'c', long = "comp", default_value = "3")]
+        compression_level: i32,
+        #[clap(short = 'v', long = "volume", parse(try_from_str = utils::parse_size))]
+        volume_size: Option<u64>,
+        #[clap(required = true)]
+        input: Vec<String>,
+    },
+    Decrypt {
+        #[clap(short = 'o', long = "output")]
+        output: Option<String>,
+        #[clap(required = true)]
+        input: String,
+    },
+    Test {
+        #[clap(required = true)]
+        input: String,
+    },
+}
+
 fn main() {
-    let arg_vec: Vec<String> = env::args().collect();
-    let mut parser = parsing::Parser::new();
-    parser.add_argument("output", Some("o"), 1);
-    parser.add_argument("comp", Some("c"), 1);
-    parser.add_argument("volume", Some("v"), 1);
-    parser.add_argument("passfile", Some("P"), 1);
-    parser.add_argument("password", Some("p"), 1);
-    let args = parser.parse_args(&arg_vec[2..]).unwrap();
+    let opts: Opts = Opts::parse();
+    println!("{:?}", opts);
     sodium::init().unwrap();
-    println!("{:?}", &args);
-    let op = &arg_vec[1];
-    let mut result: Result<(), Error> = Err(err_msg("Invalid operation"));
-    if op == "encrypt" {
-        let compression_level = args
-            .flags
-            .get("comp")
-            .map(|o| o.as_ref().unwrap().as_str())
-            .or(Some("3"))
+    let password = match opts.password {
+        Some(password) => password,
+        None => read_file_content(opts.password_file.unwrap())
             .unwrap()
-            .parse::<i32>()
-            .unwrap();
-        let volume_size = args
-            .flags
-            .get("volume")
-            .map(|o| o.as_ref().unwrap())
-            .map(|v| utils::parse_size(v))
-            .transpose()
-            .unwrap();
-        println!("{:?}", volume_size);
-        result = encrypt_file(
-            &args.positionals,
-            args.flags
-                .get("output")
-                .map(|s| s.as_ref().unwrap().as_str())
-                .unwrap(),
-            get_password(&args).unwrap().as_str(),
+            .trim()
+            .to_owned(),
+    };
+    let result: Result<(), Error> = match opts.subcommand {
+        Subcommands::Encrypt {
             compression_level,
             volume_size,
-        );
-    } else if op == "decrypt" {
-        result = decrypt_file(
-            args.positionals[0].as_str(),
-            args.flags
-                .get("output")
-                .map(|s| s.as_ref().unwrap().as_str())
-                .unwrap(),
-            get_password(&args).unwrap().as_str(),
-        );
-    } else if op == "test" {
-        result = test_file(
-            &args.positionals.get(0).unwrap(),
-            get_password(&args).unwrap().as_str(),
-        );
-    }
+            output,
+            input,
+        } => encrypt_file(
+            &input,
+            &output,
+            &password,
+            Some(compression_level),
+            volume_size,
+        ),
+        Subcommands::Decrypt { output, input } => {
+            decrypt_file(&input, &output.unwrap_or(".".to_owned()), &password)
+        }
+        Subcommands::Test { input } => test_file(&input, &password),
+    };
     if let Err(err) = result {
         println!("Error: {}", err);
         println!("{}", err.backtrace());

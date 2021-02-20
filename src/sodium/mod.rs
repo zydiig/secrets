@@ -1,4 +1,6 @@
+use once_cell::sync::OnceCell;
 use std::ffi::CStr;
+use std::sync::Once;
 
 #[allow(dead_code, non_upper_case_globals, non_camel_case_types)]
 mod _sodium;
@@ -11,11 +13,12 @@ pub mod secretstream;
 #[allow(dead_code)]
 pub mod signing;
 
-pub fn init() -> Result<(), &'static str> {
-    unsafe {
-        if _sodium::sodium_init() < 0 {
-            return Err("Failed to initialize libsodium");
-        }
+static INITIALIZED: OnceCell<::std::os::raw::c_int> = OnceCell::new();
+
+pub fn init() -> Result<(), failure::Error> {
+    if *INITIALIZED.get_or_init(|| unsafe { _sodium::sodium_init() }) < 0 {
+        Err(failure::err_msg("Failed to initialize libsodium"))
+    } else {
         Ok(())
     }
 }

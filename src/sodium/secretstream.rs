@@ -1,5 +1,5 @@
 use super::_sodium;
-use failure::{err_msg, Error, ResultExt};
+use failure::{err_msg, Error};
 use std::alloc::{alloc, Layout};
 use std::convert::TryFrom;
 use std::mem::align_of;
@@ -42,7 +42,7 @@ impl Into<u8> for MessageTag {
             MessageTag::Push => _sodium::crypto_secretstream_xchacha20poly1305_TAG_PUSH,
             MessageTag::Rekey => _sodium::crypto_secretstream_xchacha20poly1305_TAG_REKEY,
             MessageTag::Final => _sodium::crypto_secretstream_xchacha20poly1305_TAG_FINAL,
-        } as u8)
+        }) as u8
     }
 }
 
@@ -80,13 +80,13 @@ impl Drop for SecretStream {
 impl SecretStream {
     fn alloc_state() -> *mut InternalState {
         unsafe {
-            (alloc(
+            alloc(
                 Layout::from_size_align(
                     _sodium::crypto_secretstream_xchacha20poly1305_statebytes(),
                     align_of::<u8>(),
                 )
                 .expect("Bad memory layout"),
-            ) as *mut InternalState)
+            ) as *mut InternalState
         }
     }
 
@@ -212,8 +212,8 @@ impl SecretStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::sodium::randombytes;
     use crate::sodium::secretstream;
+    use crate::sodium::{init, randombytes};
     use std::time::Instant;
 
     fn stream_perf_test_size(size: usize) {
@@ -221,7 +221,7 @@ mod tests {
         let pusher = secretstream::SecretStream::new_push(&key).unwrap();
         let puller = secretstream::SecretStream::new_pull(&pusher.get_header(), &key).unwrap();
         let input = randombytes(size);
-        let iterations = 4000;
+        let iterations = 40000;
         let start = Instant::now();
         for i in 1..=iterations {
             let c = pusher.push(&input, None, None);
@@ -236,6 +236,7 @@ mod tests {
 
     #[test]
     fn perf_test() {
+        init().unwrap();
         for size in &[1024, 4096, 8192, 16384, 65536] {
             stream_perf_test_size(*size);
         }
