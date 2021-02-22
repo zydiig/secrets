@@ -1,4 +1,5 @@
 use crate::sodium::_sodium;
+use failure::err_msg;
 use std::ptr::null;
 use std::ptr::null_mut;
 
@@ -35,10 +36,10 @@ pub fn decrypt(
     key: &[u8],
     nonce: &[u8],
     ad: Option<&[u8]>,
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<Vec<u8>, failure::Error> {
     unsafe {
         if data.len() < ADDITIONAL_BYTES {
-            return Err("Ciphertext too short");
+            return Err(err_msg("Ciphertext too short"));
         }
         let mut plaintext = vec![0u8; data.len() - ADDITIONAL_BYTES];
         let (ad, ad_len) = match ad {
@@ -61,7 +62,7 @@ pub fn decrypt(
                 plaintext.truncate(size as usize);
                 Ok(plaintext)
             }
-            _ => Err("Failed to decrypt"),
+            _ => Err(err_msg("Failed to decrypt")),
         }
     }
 }
@@ -111,7 +112,7 @@ mod tests {
         let nonce = randombytes(NONCE_BYTES);
         let start = Instant::now();
         for i in 1..=ITERATIONS {
-            let result = encrypt(&data, &key, &nonce, None);
+            let _ = encrypt(&data, &key, &nonce, None);
         }
         let time = Instant::now().duration_since(start).as_secs_f64();
         println!(
@@ -126,8 +127,8 @@ mod tests {
         let key = randombytes(aes::KEY_BYTES);
         let nonce = randombytes(aes::NONCE_BYTES);
         let start = Instant::now();
-        for i in 1..=ITERATIONS {
-            let result = aes::encrypt(&data, &key, &nonce, None);
+        for _ in 1..=ITERATIONS {
+            let _ = aes::encrypt(&data, &key, &nonce, None);
         }
         let time = Instant::now().duration_since(start).as_secs_f64();
         println!(

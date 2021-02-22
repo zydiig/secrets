@@ -1,5 +1,7 @@
 pub mod archive;
 pub mod buffer;
+pub mod key;
+pub mod kyber;
 pub mod parsing;
 pub mod sodium;
 pub mod utils;

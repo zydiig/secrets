@@ -120,8 +120,8 @@ impl ArchiveWriter {
         info[0] = part_type as u8;
         let clen = data.len() + secretstream::ADDITIONAL_BYTES;
         BigEndian::write_u32(&mut info[1..], clen as u32);
-        let encrypted_info = self.pusher.push(&info, None, None).unwrap();
-        let encrypted_data = self.pusher.push(data, None, None).unwrap();
+        let encrypted_info = self.pusher.push(&info, None).unwrap();
+        let encrypted_data = self.pusher.push(data, None).unwrap();
         assert_eq!(encrypted_data.len(), clen);
         assert!(encrypted_data.len() as u64 <= std::u32::MAX as u64);
         self.file
@@ -291,7 +291,7 @@ impl ArchiveReader {
     pub fn read_chunk(&mut self) -> Result<(ChunkType, Vec<u8>), Error> {
         let mut encrypted_info = [0u8; 1 + size_of::<u32>() + secretstream::ADDITIONAL_BYTES];
         self.file.read_exact(&mut encrypted_info)?;
-        let (info, _) = self
+        let info = self
             .puller
             .pull(&encrypted_info, None)
             .context("Error decrypting chunk info")?;
@@ -299,7 +299,7 @@ impl ArchiveReader {
         let clen = BigEndian::read_u32(&info[1..]);
         let mut ciphertext = vec![0u8; clen as usize];
         self.file.read_exact(&mut ciphertext)?;
-        let (chunk, _) = self
+        let chunk = self
             .puller
             .pull(&ciphertext, None)
             .context("Error decrypting chunk data")?;

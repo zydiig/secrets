@@ -31,11 +31,11 @@ fn write_chunk(
         (data.len() + sodium::secretstream::ADDITIONAL_BYTES) as u32,
     );
     info[0] = chunk_type;
-    let enc_info = stream.push(&info, None, None).unwrap();
+    let enc_info = stream.push(&info, None).unwrap();
     output
         .write_all(&enc_info)
         .context("Error writing chunk info")?;
-    let enc_data = stream.push(data, None, None).unwrap();
+    let enc_data = stream.push(data, None).unwrap();
     output
         .write_all(&enc_data)
         .context("Error writing chunk data")?;
@@ -90,12 +90,12 @@ fn read_chunk(
 ) -> Result<(Vec<u8>, u8), Error> {
     let mut enc_info = vec![0u8; size_of::<u32>() + 1 + sodium::secretstream::ADDITIONAL_BYTES];
     input.read_exact(&mut enc_info)?;
-    let info = stream.pull(&enc_info, None)?.0;
+    let info = stream.pull(&enc_info, None)?;
     let chunk_type = info[0];
     let size = BigEndian::read_u32(&info[1..]);
     let mut enc_data = vec![0u8; size as usize];
     input.read_exact(&mut enc_data)?;
-    let data = stream.pull(&enc_data, None)?.0;
+    let data = stream.pull(&enc_data, None)?;
     Ok((data, chunk_type))
 }
 

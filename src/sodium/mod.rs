@@ -1,6 +1,5 @@
 use once_cell::sync::OnceCell;
 use std::ffi::CStr;
-use std::sync::Once;
 
 #[allow(dead_code, non_upper_case_globals, non_camel_case_types)]
 mod _sodium;
@@ -8,7 +7,9 @@ pub mod aead;
 pub mod crypto_box;
 pub mod hashing;
 pub mod kdf;
+pub mod kx;
 pub mod pwhash;
+pub mod secretbox;
 pub mod secretstream;
 #[allow(dead_code)]
 pub mod signing;

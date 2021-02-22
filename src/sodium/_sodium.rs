@@ -23,6 +23,11 @@ pub const crypto_kdf_BYTES_MAX: u32 = 64;
 pub const crypto_kdf_CONTEXTBYTES: u32 = 8;
 pub const crypto_kdf_KEYBYTES: u32 = 32;
 pub const crypto_kdf_PRIMITIVE: &'static [u8; 8usize] = b"blake2b\0";
+pub const crypto_kx_PUBLICKEYBYTES: u32 = 32;
+pub const crypto_kx_SECRETKEYBYTES: u32 = 32;
+pub const crypto_kx_SEEDBYTES: u32 = 32;
+pub const crypto_kx_SESSIONKEYBYTES: u32 = 32;
+pub const crypto_kx_PRIMITIVE: &'static [u8; 14usize] = b"x25519blake2b\0";
 pub const crypto_pwhash_argon2i_ALG_ARGON2I13: u32 = 1;
 pub const crypto_pwhash_argon2i_BYTES_MIN: u32 = 16;
 pub const crypto_pwhash_argon2i_PASSWD_MIN: u32 = 0;
@@ -74,6 +79,17 @@ pub const crypto_pwhash_MEMLIMIT_MODERATE: u32 = 268435456;
 pub const crypto_pwhash_OPSLIMIT_SENSITIVE: u32 = 4;
 pub const crypto_pwhash_MEMLIMIT_SENSITIVE: u32 = 1073741824;
 pub const crypto_pwhash_PRIMITIVE: &'static [u8; 8usize] = b"argon2i\0";
+pub const crypto_secretbox_xsalsa20poly1305_KEYBYTES: u32 = 32;
+pub const crypto_secretbox_xsalsa20poly1305_NONCEBYTES: u32 = 24;
+pub const crypto_secretbox_xsalsa20poly1305_MACBYTES: u32 = 16;
+pub const crypto_secretbox_xsalsa20poly1305_BOXZEROBYTES: u32 = 16;
+pub const crypto_secretbox_xsalsa20poly1305_ZEROBYTES: u32 = 32;
+pub const crypto_secretbox_KEYBYTES: u32 = 32;
+pub const crypto_secretbox_NONCEBYTES: u32 = 24;
+pub const crypto_secretbox_MACBYTES: u32 = 16;
+pub const crypto_secretbox_PRIMITIVE: &'static [u8; 17usize] = b"xsalsa20poly1305\0";
+pub const crypto_secretbox_ZEROBYTES: u32 = 32;
+pub const crypto_secretbox_BOXZEROBYTES: u32 = 16;
 pub const crypto_secretstream_xchacha20poly1305_ABYTES: u32 = 17;
 pub const crypto_secretstream_xchacha20poly1305_HEADERBYTES: u32 = 24;
 pub const crypto_secretstream_xchacha20poly1305_KEYBYTES: u32 = 32;
@@ -84,6 +100,9 @@ pub const crypto_secretstream_xchacha20poly1305_TAG_FINAL: u32 = 3;
 pub const crypto_sign_BYTES: u32 = 64;
 pub const crypto_sign_PUBLICKEYBYTES: u32 = 32;
 pub const crypto_sign_SECRETKEYBYTES: u32 = 64;
+pub const crypto_secretbox_xchacha20poly1305_KEYBYTES: u32 = 32;
+pub const crypto_secretbox_xchacha20poly1305_NONCEBYTES: u32 = 24;
+pub const crypto_secretbox_xchacha20poly1305_MACBYTES: u32 = 16;
 pub const crypto_pwhash_scryptsalsa208sha256_BYTES_MIN: u32 = 16;
 pub const crypto_pwhash_scryptsalsa208sha256_PASSWD_MIN: u32 = 0;
 pub const crypto_pwhash_scryptsalsa208sha256_SALTBYTES: u32 = 32;
@@ -386,6 +405,52 @@ extern "C" {
     pub fn crypto_kdf_keygen(k: *mut ::std::os::raw::c_uchar);
 }
 extern "C" {
+    pub fn crypto_kx_publickeybytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_kx_secretkeybytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_kx_seedbytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_kx_sessionkeybytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_kx_primitive() -> *const ::std::os::raw::c_char;
+}
+extern "C" {
+    pub fn crypto_kx_seed_keypair(
+        pk: *mut ::std::os::raw::c_uchar,
+        sk: *mut ::std::os::raw::c_uchar,
+        seed: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_kx_keypair(
+        pk: *mut ::std::os::raw::c_uchar,
+        sk: *mut ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_kx_client_session_keys(
+        rx: *mut ::std::os::raw::c_uchar,
+        tx: *mut ::std::os::raw::c_uchar,
+        client_pk: *const ::std::os::raw::c_uchar,
+        client_sk: *const ::std::os::raw::c_uchar,
+        server_pk: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_kx_server_session_keys(
+        rx: *mut ::std::os::raw::c_uchar,
+        tx: *mut ::std::os::raw::c_uchar,
+        server_pk: *const ::std::os::raw::c_uchar,
+        server_sk: *const ::std::os::raw::c_uchar,
+        client_pk: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
     pub fn crypto_pwhash(
         out: *mut ::std::os::raw::c_uchar,
         outlen: ::std::os::raw::c_ulonglong,
@@ -395,6 +460,116 @@ extern "C" {
         opslimit: ::std::os::raw::c_ulonglong,
         memlimit: usize,
         alg: ::std::os::raw::c_int,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305_keybytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305_noncebytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305_macbytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305_messagebytes_max() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305(
+        c: *mut ::std::os::raw::c_uchar,
+        m: *const ::std::os::raw::c_uchar,
+        mlen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305_open(
+        m: *mut ::std::os::raw::c_uchar,
+        c: *const ::std::os::raw::c_uchar,
+        clen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305_keygen(k: *mut ::std::os::raw::c_uchar);
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305_boxzerobytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xsalsa20poly1305_zerobytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_keybytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_noncebytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_macbytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_primitive() -> *const ::std::os::raw::c_char;
+}
+extern "C" {
+    pub fn crypto_secretbox_messagebytes_max() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_easy(
+        c: *mut ::std::os::raw::c_uchar,
+        m: *const ::std::os::raw::c_uchar,
+        mlen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_open_easy(
+        m: *mut ::std::os::raw::c_uchar,
+        c: *const ::std::os::raw::c_uchar,
+        clen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_detached(
+        c: *mut ::std::os::raw::c_uchar,
+        mac: *mut ::std::os::raw::c_uchar,
+        m: *const ::std::os::raw::c_uchar,
+        mlen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_open_detached(
+        m: *mut ::std::os::raw::c_uchar,
+        c: *const ::std::os::raw::c_uchar,
+        mac: *const ::std::os::raw::c_uchar,
+        clen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_keygen(k: *mut ::std::os::raw::c_uchar);
+}
+extern "C" {
+    pub fn crypto_secretbox_zerobytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_boxzerobytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_open(
+        m: *mut ::std::os::raw::c_uchar,
+        c: *const ::std::os::raw::c_uchar,
+        clen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
     ) -> ::std::os::raw::c_int;
 }
 extern "C" {
@@ -544,5 +719,55 @@ extern "C" {
         bin: *const ::std::os::raw::c_uchar,
         bin_len: usize,
     ) -> *mut ::std::os::raw::c_char;
+}
+extern "C" {
+    pub fn crypto_secretbox_xchacha20poly1305_keybytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xchacha20poly1305_noncebytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xchacha20poly1305_macbytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xchacha20poly1305_messagebytes_max() -> usize;
+}
+extern "C" {
+    pub fn crypto_secretbox_xchacha20poly1305_easy(
+        c: *mut ::std::os::raw::c_uchar,
+        m: *const ::std::os::raw::c_uchar,
+        mlen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_xchacha20poly1305_open_easy(
+        m: *mut ::std::os::raw::c_uchar,
+        c: *const ::std::os::raw::c_uchar,
+        clen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_xchacha20poly1305_detached(
+        c: *mut ::std::os::raw::c_uchar,
+        mac: *mut ::std::os::raw::c_uchar,
+        m: *const ::std::os::raw::c_uchar,
+        mlen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_secretbox_xchacha20poly1305_open_detached(
+        m: *mut ::std::os::raw::c_uchar,
+        c: *const ::std::os::raw::c_uchar,
+        mac: *const ::std::os::raw::c_uchar,
+        clen: ::std::os::raw::c_ulonglong,
+        n: *const ::std::os::raw::c_uchar,
+        k: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
 }
 pub const crypto_generichash_STATEBYTES: usize = 384;
