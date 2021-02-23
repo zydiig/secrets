@@ -24,7 +24,7 @@ pub struct SecretStream {
 }
 
 pub fn generate_key() -> Vec<u8> {
-    sodium::init();
+    sodium::init().unwrap();
     unsafe {
         let mut key = vec![0u8; KEY_BYTES];
         _sodium::crypto_aead_xchacha20poly1305_ietf_keygen(key.as_mut_ptr());

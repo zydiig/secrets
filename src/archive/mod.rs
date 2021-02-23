@@ -54,7 +54,7 @@ pub struct Manifest {
     objects: Vec<ObjectInfo>,
 }
 
-fn get_real_path<P: AsRef<Path>>(path: P, volume_counter: u64) -> Result<PathBuf, Error> {
+fn append_volume_counter<P: AsRef<Path>>(path: P, volume_counter: u64) -> Result<PathBuf, Error> {
     let mut filename = path
         .as_ref()
         .file_name()
@@ -84,9 +84,8 @@ impl ArchiveWriter {
         volume_size: Option<u64>,
     ) -> Result<Self, Error> {
         let mut file = match volume_size {
-            Some(_) => {
-                File::create(get_real_path(path.as_ref(), 1)?).context("Error opening file")?
-            }
+            Some(_) => File::create(append_volume_counter(path.as_ref(), 1)?)
+                .context("Error opening file")?,
             None => File::create(path.as_ref()).context("Error opening file")?,
         };
         let mut byte_count = 0u64;
@@ -141,13 +140,16 @@ impl ArchiveWriter {
                 + data.len()
                 + secretstream::ADDITIONAL_BYTES) as u64;
             let extra_size =
-                (4 + 1 + secretstream::ADDITIONAL_BYTES + 1024 + secretstream::ADDITIONAL_BYTES)
+                (4 + 1 + secretstream::ADDITIONAL_BYTES + 8192 + secretstream::ADDITIONAL_BYTES)
                     as u64;
-            if self.byte_count + chunk_size + extra_size > volume_size - 4 * 1024 {
+            if self.byte_count + chunk_size + extra_size + 4 * 1024 >= volume_size {
                 self.write_chunk_unchecked(&[], ChunkType::VolumeEnd)
                     .context("Error writing VolumeEnd chunk")?;
-                self.file = File::create(get_real_path(&self.raw_path, self.volume_counter + 1)?)
-                    .context("Error creating next volume")?;
+                self.file = File::create(append_volume_counter(
+                    &self.raw_path,
+                    self.volume_counter + 1,
+                )?)
+                .context("Error creating next volume")?;
                 self.volume_counter += 1;
                 self.byte_count = 0;
             }

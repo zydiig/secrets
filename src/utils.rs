@@ -113,6 +113,27 @@ impl<W: Write> Write for HashingWriter<W> {
     }
 }
 
+pub mod codecs {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn to_base64<S>(key: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&base64::encode(&key))
+    }
+
+    pub fn from_base64<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+        String::deserialize(deserializer).and_then(|string| {
+            base64::decode(&string).map_err(|err| D::Error::custom(err.to_string()))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::utils::{generate_tree, parse_size};

@@ -1,7 +1,10 @@
 use crate::kyber;
 use crate::sodium;
+use crate::sodium::crypto_box;
+use crate::sodium::crypto_box::Keypair;
 use crate::sodium::pwhash::pwhash;
 use crate::sodium::randombytes;
+use crate::utils::codecs;
 use failure::{Fail, ResultExt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fs::File;
@@ -9,34 +12,12 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 #[derive(Serialize, Deserialize)]
-pub struct FullKey {
-    #[serde(serialize_with = "to_base64", deserialize_with = "from_base64")]
-    x25519_pk: Vec<u8>,
-    #[serde(serialize_with = "to_base64", deserialize_with = "from_base64")]
-    x25519_sk: Vec<u8>,
-    #[serde(serialize_with = "to_base64", deserialize_with = "from_base64")]
-    kyber_pk: Vec<u8>,
-    #[serde(serialize_with = "to_base64", deserialize_with = "from_base64")]
-    kyber_sk: Vec<u8>,
+pub struct Key {
+    box_keypair: crypto_box::Keypair,
+    kyber_keypair: kyber::Keypair,
 }
 
-fn to_base64<S>(key: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_str(&base64::encode(&key))
-}
-
-fn from_base64<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de::Error;
-    String::deserialize(deserializer)
-        .and_then(|string| base64::decode(&string).map_err(|err| D::Error::custom(err.to_string())))
-}
-
-impl FullKey {
+impl Key {
     pub fn load_from_file<P: AsRef<Path>>(path: P, password: &str) -> Result<Self, failure::Error> {
         let mut file = File::open(path.as_ref()).context("Error opening key file")?;
         let mut salt = vec![0u8; sodium::pwhash::SALT_BYTES];
@@ -56,23 +37,28 @@ impl FullKey {
         let content =
             sodium::secretbox::open(&content, &nonce, &key).context("Error decrypting key")?;
         println!("{}", String::from_utf8_lossy(&content));
-        let key: FullKey = serde_json::from_slice(&content).context("Error parsing key")?;
+        let key: Key = serde_json::from_slice(&content).context("Error parsing key")?;
         return Ok(key);
     }
 
     pub fn generate() -> Result<Self, failure::Error> {
-        let x25519_keypair = sodium::kx::Keypair::generate();
+        let box_keypair = sodium::crypto_box::Keypair::generate();
         let kyber_keypair = kyber::Keypair::generate();
         Ok(Self {
-            x25519_pk: x25519_keypair.pk,
-            x25519_sk: x25519_keypair.sk,
-            kyber_pk: kyber_keypair.pk,
-            kyber_sk: kyber_keypair.sk,
+            box_keypair,
+            kyber_keypair,
         })
     }
 
+    pub fn export_public_keys(&self) -> PublicKey {
+        PublicKey {
+            box_pk: self.box_keypair.pk.clone(),
+            kyber_pk: self.kyber_keypair.pk.clone(),
+        }
+    }
+
     pub fn save_to_file<P: AsRef<Path>>(
-        &mut self,
+        &self,
         path: P,
         password: &str,
     ) -> Result<(), failure::Error> {
@@ -101,22 +87,40 @@ impl FullKey {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct PublicKey {
-    x25519_pk: Vec<u8>,
-    kyber_pk: Vec<u8>,
+    #[serde(
+        serialize_with = "codecs::to_base64",
+        deserialize_with = "codecs::from_base64"
+    )]
+    pub box_pk: Vec<u8>,
+    #[serde(
+        serialize_with = "codecs::to_base64",
+        deserialize_with = "codecs::from_base64"
+    )]
+    pub kyber_pk: Vec<u8>,
+}
+
+impl PublicKey {
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), failure::Error> {
+        let mut file = File::create(path.as_ref()).context("Error opening file for write")?;
+        file.write_all(&serde_json::to_vec_pretty(self).context("Error serializing public key")?)
+            .context("Error writing public key")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::key::FullKey;
+    use crate::key::Key;
     use crate::sodium;
 
     #[test]
     fn keygen_test() {
         sodium::init().unwrap();
-        FullKey::generate()
-            .unwrap()
-            .save_to_file("/tmp/test.key", "password");
-        FullKey::load_from_file("/tmp/test.key", "password");
+        let keypair = Key::generate().unwrap();
+        keypair.save_to_file("/tmp/test.key", "password");
+        keypair.export_public_keys().save_to_file("/tmp/test.pub");
+        Key::load_from_file("/tmp/test.key", "password");
     }
 }

@@ -360,6 +360,26 @@ extern "C" {
         sk: *const ::std::os::raw::c_uchar,
     ) -> ::std::os::raw::c_int;
 }
+extern "C" {
+    pub fn crypto_box_sealbytes() -> usize;
+}
+extern "C" {
+    pub fn crypto_box_seal(
+        c: *mut ::std::os::raw::c_uchar,
+        m: *const ::std::os::raw::c_uchar,
+        mlen: ::std::os::raw::c_ulonglong,
+        pk: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn crypto_box_seal_open(
+        m: *mut ::std::os::raw::c_uchar,
+        c: *const ::std::os::raw::c_uchar,
+        clen: ::std::os::raw::c_ulonglong,
+        pk: *const ::std::os::raw::c_uchar,
+        sk: *const ::std::os::raw::c_uchar,
+    ) -> ::std::os::raw::c_int;
+}
 #[repr(C)]
 #[repr(align(64))]
 #[derive(Copy, Clone)]

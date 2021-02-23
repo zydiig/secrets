@@ -40,6 +40,7 @@ fn main() {
         .whitelist_function("randombytes_((buf.*)|(uniform)|(random))")
         .whitelist_function("sodium_(init|increment)")
         .whitelist_function("crypto_box_(keypair|easy|open_easy)")
+        .whitelist_function("crypto_box_seal.*")
         .whitelist_function("crypto_secretbox_.+")
         .whitelist_function("crypto_sign(_open|_keypair)?")
         .whitelist_function("crypto_sign_(verify_)?detached")
